@@ -431,9 +431,8 @@ Download and update h2o-3 source codes:
 
 ##### Step 1. Install Node.js
 
-    curl -sL https://deb.nodesource.com/setup_0.12 | sudo bash -
+    curl -sL https://deb.nodesource.com/setup_10.x | sudo bash -
     sudo apt-get install -y nodejs
-
 
 ##### Steps 2-4. Follow steps 2-4 for Ubuntu 14.04 (above)
 
@@ -717,6 +716,19 @@ Click, C., Lanford, J., Malohlava, M., Parmar, V., and Roark, H. (Oct. 2016). _G
 
 H2O has been built by a great many number of contributors over the years both within H2O.ai (the company) and the greater open source community.  You can begin to contribute to H2O by answering [Stack Overflow](http://stackoverflow.com/questions/tagged/h2o) questions or [filing bug reports](https://0xdata.atlassian.net/projects/PUBDEV/issues).  Please join us!  
 
+<a name="Roadmap"></a>
+## 11. Roadmap
+
+Next major H2O release (3.26) is planned for the end of June/beginning of July and will add these major features:
+
+* SVM
+* Customized Loss Function in GBM
+* Isolation Forest – early stopping + variable importance
+* XGBoost Upgrade and performance improvements
+* CoxPH in Python
+* MOJO Import improvements
+* MOJO for Target Encoding
+
 ### Team & Committers
 
 ```
@@ -786,6 +798,7 @@ Terone Ward
 Leland Wilkinson
 Wendy Wong
 Nikhil Shekhar
+Pavel Pscheidl
 ```
 
 <a name="Advisors"></a>

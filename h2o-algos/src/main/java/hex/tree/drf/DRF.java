@@ -19,9 +19,7 @@ import static hex.genmodel.GenModel.getPrediction;
 import static hex.tree.drf.TreeMeasuresCollector.asSSE;
 import static hex.tree.drf.TreeMeasuresCollector.asVotes;
 
-/** Gradient Boosted Trees
- *
- *  Based on "Elements of Statistical Learning, Second Edition, page 387"
+/** Distributed Random Forest
  */
 public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel.DRFParameters, hex.tree.drf.DRFModel.DRFOutput> {
   private static final double ONEBOUND=1+1e-12;    // due to fixed precision
@@ -62,7 +60,9 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
         error("_mtries","Computed mtries should be -1 or -2 or in interval [1,"+ncols+"[ but it is " + _parms._mtries);
     }
     if (_parms._distribution == DistributionFamily.quasibinomial)
-      error("_distribution", "Quasibinomial is not supported for DRF in current H2O.");
+      error("_distribution", "Quasibinomial distribution is not supported for DRF in current H2O.");
+    if (_parms._distribution == DistributionFamily.custom)
+      error("_distribution", "Custom distribution is not supported for DRF in current H2O.");
     if (_parms._distribution == DistributionFamily.AUTO) {
       if (_nclass == 1) _parms._distribution = DistributionFamily.gaussian;
       if (_nclass >= 2) _parms._distribution = DistributionFamily.multinomial;
@@ -71,9 +71,6 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
       warn("_sample_rate", "Sample rate is 100% and no validation dataset and no cross-validation. There are no out-of-bag data to compute error estimates on the training data!");
     if (hasOffsetCol())
       error("_offset_column", "Offsets are not yet supported for DRF.");
-    if (hasOffsetCol() && isClassifier()) {
-      error("_offset_column", "Offset is only supported for regression.");
-    }
   }
 
   // ----------------------
@@ -188,7 +185,7 @@ public class DRF extends SharedTree<hex.tree.drf.DRFModel, hex.tree.drf.DRFModel
           // inverse of the first (and that the same columns were picked)
           if( k==1 && _nclass==2 && _model.binomialOpt()) continue;
           ktrees[k] = new DTree(_train, _ncols, _mtry, _mtry_per_tree, rseed, _parms);
-          new UndecidedNode(ktrees[k], -1, DHistogram.initialHist(_train, _ncols, adj_nbins, hcs[k][0], rseed, _parms, getGlobalQuantilesKeys())); // The "root" node
+          new UndecidedNode(ktrees[k], -1, DHistogram.initialHist(_train, _ncols, adj_nbins, hcs[k][0], rseed, _parms, getGlobalQuantilesKeys(), null), null); // The "root" node
         }
       }
 

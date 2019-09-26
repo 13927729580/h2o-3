@@ -89,15 +89,6 @@ def url_encode(s):
 def quote(s):
     return url_encode(s)
 
-
-def urlopen():
-    if PY3:
-        from urllib import request
-        return request.urlopen
-    else:
-        import urllib2
-        return urllib2.urlopen
-
 def clamp(x, xmin, xmax):
     """Return the value of x, clamped from below by `xmin` and from above by `xmax`."""
     return max(xmin, min(x, xmax))
@@ -179,7 +170,7 @@ def _handle_numpy_array(python_obj, header):
 
 def _handle_pandas_data_frame(python_obj, header):
     data = _handle_python_lists(python_obj.values.tolist(), -1)[1]
-    return list(python_obj.columns), data
+    return list(str(c) for c in python_obj.columns), data
 
 def _handle_python_dicts(python_obj, check_header):
     header = list(python_obj.keys()) if python_obj else _gen_header(1)
@@ -376,7 +367,8 @@ gen_model_file_name = "h2o-genmodel.jar"
 h2o_predictor_class = "hex.genmodel.tools.PredictCsv"
 
 
-def mojo_predict_pandas(dataframe, mojo_zip_path, genmodel_jar_path=None, classpath=None, java_options=None, verbose=False):
+def mojo_predict_pandas(dataframe, mojo_zip_path, genmodel_jar_path=None, classpath=None, java_options=None, 
+                        verbose=False, setInvNumNA=False):
     """
     MOJO scoring function to take a Pandas frame and use MOJO model as zip file to score.
 
@@ -401,13 +393,14 @@ def mojo_predict_pandas(dataframe, mojo_zip_path, genmodel_jar_path=None, classp
         dataframe.to_csv(input_csv_path)
         mojo_predict_csv(input_csv_path=input_csv_path, mojo_zip_path=mojo_zip_path,
                          output_csv_path=prediction_csv_path, genmodel_jar_path=genmodel_jar_path,
-                         classpath=classpath, java_options=java_options, verbose=verbose)
+                         classpath=classpath, java_options=java_options, verbose=verbose, setInvNumNA=setInvNumNA)
         return pandas.read_csv(prediction_csv_path)
     finally:
         shutil.rmtree(tmp_dir)
 
 
-def mojo_predict_csv(input_csv_path, mojo_zip_path, output_csv_path=None, genmodel_jar_path=None, classpath=None, java_options=None, verbose=False):
+def mojo_predict_csv(input_csv_path, mojo_zip_path, output_csv_path=None, genmodel_jar_path=None, classpath=None, 
+                     java_options=None, verbose=False, setInvNumNA=False):
     """
     MOJO scoring function to take a CSV file and use MOJO model as zip file to score.
 
@@ -478,9 +471,14 @@ def mojo_predict_csv(input_csv_path, mojo_zip_path, output_csv_path=None, genmod
         cmd += [option]
     cmd += ["-cp", classpath, h2o_predictor_class, "--mojo", mojo_zip_path, "--input", input_csv_path,
             '--output', output_csv_path, '--decimal']
+
+    if setInvNumNA:
+        cmd.append('--setConvertInvalidNum')
+        
     if verbose:
         cmd_str = " ".join(cmd)
         print("java cmd:\t%s" % cmd_str)
+               
 
     # invoke the command
     subprocess.check_call(cmd, shell=False)

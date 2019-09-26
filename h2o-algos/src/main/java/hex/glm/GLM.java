@@ -4,12 +4,12 @@ import hex.DataInfo;
 import hex.ModelBuilder;
 import hex.ModelCategory;
 import hex.ModelMetrics;
-import hex.deeplearning.DeepLearningModel.DeepLearningParameters.MissingValuesHandling;
 import hex.glm.GLMModel.GLMOutput;
 import hex.glm.GLMModel.GLMParameters;
 import hex.glm.GLMModel.GLMParameters.Family;
 import hex.glm.GLMModel.GLMParameters.Link;
 import hex.glm.GLMModel.GLMParameters.Solver;
+import hex.glm.GLMModel.GLMParameters.MissingValuesHandling;
 import hex.glm.GLMModel.GLMWeightsFun;
 import hex.glm.GLMModel.Submodel;
 import hex.glm.GLMTask.*;
@@ -29,6 +29,7 @@ import org.joda.time.format.DateTimeFormatter;
 import water.*;
 import water.exceptions.H2OModelBuilderIllegalArgumentException;
 import water.fvec.Frame;
+import water.fvec.InteractionWrappedVec;
 import water.fvec.Vec;
 import water.parser.BufferedString;
 import water.util.*;
@@ -111,6 +112,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
    */
   @Override
   public void cv_computeAndSetOptimalParameters(ModelBuilder[] cvModelBuilders) {
+    if(_parms._max_runtime_secs != 0) _parms._max_runtime_secs = 0;
     if(_parms._lambda_search) {
       _xval_test_deviances = new double[_parms._lambda.length];
       _xval_test_sd = new double [_parms._lambda.length];
@@ -388,11 +390,20 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
             error("_family", H2O.technote(2, "Multinomial requires a categorical response with at least 3 levels (for 2 class problem use family=binomial."));
           break;
         case poisson:
-          if (_nclass != 1) error("_family", "Poisson requires the response to be numeric.");
+        case negativebinomial:  
+          if (_nclass != 1) error("_family", "Poisson and Negative Binomial require the response" +
+                  " to be numeric.");
           if (_response.min() < 0)
-            error("_family", "Poisson requires response >= 0");
+            error("_family", "Poisson and Negative Binomial require response >= 0");
           if (!_response.isInt())
-            warn("_family", "Poisson expects non-negative integer response, got floats.");
+            warn("_family", "Poisson and Negative Binomial expect non-negative integer response," +
+                    " got floats.");
+          if (_parms._family.equals(Family.negativebinomial))
+            if (_parms._theta <= 0 || _parms._theta > 1)
+              error("_family", "Illegal Negative Binomial theta value.  Valid theta values be > 0" +
+                      " and <= 1.");
+            else
+              _parms._invTheta = 1 / _parms._theta;
           break;
         case gamma:
           if (_nclass != 1) error("_distribution", H2O.technote(2, "Gamma requires the response to be numeric."));
@@ -417,6 +428,12 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
           error("_family", "Invalid distribution: " + _parms._distribution);
       }
     }
+    if ((_parms._plug_values != null) && (_parms.missingValuesHandling() != MissingValuesHandling.PlugValues)) {
+      error("_missing_values_handling", "When plug values are provided - Missing Values Handling needs to be explicitly set to PlugValues.");
+    }
+    if (_parms._plug_values == null && _parms.missingValuesHandling() == MissingValuesHandling.PlugValues) {
+      error("_missing_values_handling", "No plug values frame provided for Missing Values Handling = PlugValues.");
+    }
     if (expensive) {
       if (error_count() > 0) return;
       if (_parms._alpha == null)
@@ -432,7 +449,19 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         _parms._use_all_factor_levels = true;
       if (_parms._link == Link.family_default)
         _parms._link = _parms._family.defaultLink;
-      _dinfo = new DataInfo(_train.clone(), _valid, 1, _parms._use_all_factor_levels || _parms._lambda_search, _parms._standardize ? DataInfo.TransformType.STANDARDIZE : DataInfo.TransformType.NONE, DataInfo.TransformType.NONE, _parms._missing_values_handling == MissingValuesHandling.Skip, _parms._missing_values_handling == MissingValuesHandling.MeanImputation, false, hasWeightCol(), hasOffsetCol(), hasFoldCol(), _parms.interactionSpec());
+      if (_parms._plug_values != null) {
+        Frame plugValues = _parms._plug_values.get();
+        if (plugValues == null) {
+          error("_plug_values", "Supplied plug values frame with key=`" + _parms._plug_values + "` doesn't exist.");
+        } else if (plugValues.numRows() != 1) {
+          error("_plug_values", "Plug values frame needs to have exactly 1 row.");
+        }
+      }
+      _dinfo = new DataInfo(_train.clone(), _valid, 1, _parms._use_all_factor_levels || _parms._lambda_search, _parms._standardize ? DataInfo.TransformType.STANDARDIZE : DataInfo.TransformType.NONE, DataInfo.TransformType.NONE, 
+              _parms.missingValuesHandling() == MissingValuesHandling.Skip, 
+              _parms.missingValuesHandling() == MissingValuesHandling.MeanImputation || _parms.missingValuesHandling() == MissingValuesHandling.PlugValues,
+              _parms.makeImputer(), 
+              false, hasWeightCol(), hasOffsetCol(), hasFoldCol(), _parms.interactionSpec());
 
       if (_parms._max_iterations == -1) { // fill in default max iterations
         int numclasses = (_parms._family == Family.multinomial)||(_parms._family == Family.ordinal)?nclasses():1;
@@ -447,7 +476,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         _validDinfo = _dinfo.validDinfo(_valid);
       _state = new ComputationState(_job, _parms, _dinfo, null, nclasses());
       // skipping extra rows? (outside of weights == 0)GLMT
-      boolean skippingRows = (_parms._missing_values_handling == MissingValuesHandling.Skip && _train.hasNAs());
+      boolean skippingRows = (_parms.missingValuesHandling() == GLMParameters.MissingValuesHandling.Skip && _train.hasNAs());
       if (hasWeightCol() || skippingRows) { // need to re-compute means and sd
         boolean setWeights = skippingRows;// && _parms._lambda_search && _parms._alpha[0] > 0;
         if (setWeights) {
@@ -479,8 +508,9 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
           _state._ymu = MemoryManager.malloc8d(_nclass);
           for (int i = 0; i < _state._ymu.length; ++i)
             _state._ymu[i] = _priorClassDist[i];
-        } else
-          _state._ymu = new double[]{_parms._intercept?_train.lastVec().mean():_parms.linkInv(0)};
+        } else {
+          _state._ymu = new double[]{_parms._intercept ? _train.lastVec().mean() : _parms.linkInv(0)};
+        }
       }
       BetaConstraint bc = (_parms._beta_constraints != null)?new BetaConstraint(_parms._beta_constraints.get()):new BetaConstraint();
       if((bc.hasBounds() || bc.hasProximalPenalty()) && _parms._compute_p_values)
@@ -505,7 +535,6 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
       GLMGradientInfo ginfo = new GLMGradientSolver(_job,_parms, _dinfo, 0, _state.activeBC()).getGradient(beta);
       _lmax = lmax(ginfo._gradient);
       _state.setLambdaMax(_lmax);
-      _model = new GLMModel(_result, _parms, GLM.this, _state._ymu, _dinfo._adaptedFrame.lastVec().sigma(), _lmax, _nobs);
       if (_parms._lambda_min_ratio == -1) {
         _parms._lambda_min_ratio = (_nobs >> 4) > _dinfo.fullN() ? 1e-4 : 1e-2;
         if(_parms._alpha[0] == 0)
@@ -543,10 +572,17 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         _parms._gradient_epsilon = _parms._lambda[0] == 0 ? 1e-6 : 1e-4;
         if(_parms._lambda_search) _parms._gradient_epsilon *= 1e-2;
       }
-      // clone2 so that I don't change instance which is in the DKV directly
-      // (clone2 also shallow clones _output)
-      _model.clone2().delete_and_lock(_job._key);
+      buildModel();
     }
+  }
+
+  // FIXME: contrary to other models, GLM output duration includes computation of CV models:
+  //  ideally the model should be instantiated in the #computeImpl() method instead of init
+  private void buildModel() {
+    _model = new GLMModel(_result, _parms, this, _state._ymu, _dinfo._adaptedFrame.lastVec().sigma(), _lmax, _nobs);
+    // clone2 so that I don't change instance which is in the DKV directly
+    // (clone2 also shallow clones _output)
+    _model.clone2().delete_and_lock(_job._key);
   }
 
   protected static final long WORK_TOTAL = 1000000;
@@ -821,7 +857,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
               ls = (_state.l1pen() == 0 && !_state.activeBC().hasBounds())
                  ? new MoreThuente(_state.gslvr(),_state.beta(), _state.ginfo())
                  : new SimpleBacktrackingLS(_state.gslvr(),_state.beta().clone(), _state.l1pen(), _state.ginfo());
-            if (!ls.evaluate(ArrayUtils.subtract(betaCnd, ls.getX(), betaCnd))) {
+            if (!ls.evaluate(ArrayUtils.subtract(betaCnd, ls.getX(), betaCnd))) { // ls.getX() get the old beta value
               Log.info(LogMsg("Ls failed " + ls));
               return;
             }
@@ -832,12 +868,13 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
             Log.info(LogMsg("computed in " + (t2 - t1) + "+" + (t3 - t2) + "+" + (t4 - t3) + "=" + (t4 - t1) + "ms, step = " + ls.step() + ((_lslvr != null) ? ", l1solver " + _lslvr : "")));
           } else
             Log.info(LogMsg("computed in " + (t2 - t1) + "+" + (t3 - t2) + "=" + (t3 - t1) + "ms, step = " + 1 + ((_lslvr != null) ? ", l1solver " + _lslvr : "")));
+          
         }
       } catch(NonSPDMatrixException e) {
         Log.warn(LogMsg("Got Non SPD matrix, stopped."));
       }
     }
-
+    
     private void fitLBFGS() {
       double [] beta = _state.beta();
       final double l1pen = _state.l1pen();
@@ -1101,7 +1138,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         if(_parms._family != Family.binomial && _parms._family != Family.poisson) {
           seEst = true;
           ComputeSETsk ct = new ComputeSETsk(null, _state.activeData(), _job._key, beta, _parms).doAll(_state.activeData()._adaptedFrame);
-          se = ct._sumsqe / (_nobs - 1 - _state.activeData().fullN());
+          se = ct._sumsqe / (_nobs - 1 - _state.activeData().fullN());  // this is the dispersion parameter estimate
         }
         double [] zvalues = MemoryManager.malloc8d(_state.activeData().fullN()+1);
         Cholesky chol = _chol;
@@ -1135,10 +1172,14 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
       Frame train = DKV.<Frame>getGet(_parms._train);
       _model.score(train).delete();
       ModelMetrics mtrain = ModelMetrics.getFromDKV(_model, train); // updated by model.scoreAndUpdateModel
-      _model._output._training_metrics = mtrain;
       long t2 = System.currentTimeMillis();
+      if (!(mtrain==null)) {
+        _model._output._training_metrics = mtrain;
+        Log.info(LogMsg(mtrain.toString()));
+      } else {
+        Log.info(LogMsg("ModelMetrics mtrain is null"));
+      }
       Log.info(LogMsg("Training metrics computed in " + (t2-t1) + "ms"));
-      Log.info(LogMsg(mtrain.toString()));
       if(_valid != null) {
         Frame valid = DKV.<Frame>getGet(_parms._valid);
         _model.score(valid).delete();
@@ -1200,6 +1241,8 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         init(true);
       if (error_count() > 0)
         throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(GLM.this);
+//      buildModel();
+      _model._output._start_time = System.currentTimeMillis(); //quickfix to align output duration with other models
       if(_parms._lambda_search) {
         if (_parms._family == Family.ordinal)
           _nullDevTrain = new GLMResDevTaskOrdinal(_job._key,_state._dinfo,getNullBeta(), _nclass).doAll(_state._dinfo._adaptedFrame).avgDev();
@@ -1240,6 +1283,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         else
           _dinfo.addResponse(new String[]{"__glm_sumExp", "__glm_maxRow"}, vecs);
       }
+      
       double oldDevTrain = _nullDevTrain;
       double oldDevTest = _nullDevTest;
       double [] devHistoryTrain = new double[5];
@@ -1249,8 +1293,8 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         updateProgress(false);
       // lambda search loop
       for (int i = 0; i < _parms._lambda.length; ++i) {  // lambda search
-        if(_parms._max_iterations != -1 && _state._iter >= _parms._max_iterations)
-          break;
+        if (_job.stop_requested() || (timeout() && _model._output._submodels.length > 0)) break;  //need at least one submodel on timeout to avoid issues.
+        if(_parms._max_iterations != -1 && _state._iter >= _parms._max_iterations) break;
         Submodel sm = computeSubmodel(i,_parms._lambda[i]);
         double trainDev = sm.devianceTrain;
         double testDev = sm.devianceTest;
@@ -1279,6 +1323,13 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
           scoreAndUpdateModel(); // update partial results
         }
         _job.update(_workPerIteration,"iter=" + _state._iter + " lmb=" + lambdaFormatter.format(_state.lambda()) + "deviance trn/tst= " + devFormatter.format(trainDev) + "/" + devFormatter.format(testDev) + " P=" + ArrayUtils.countNonzeros(_state.beta()));
+      }
+      if (stop_requested()) {
+        if (timeout()) {
+          Log.info("Stopping GLM training because of timeout");
+        } else {
+          throw new Job.JobCancelledException();
+        }
       }
       if(_state._iter >= _parms._max_iterations)
         _job.warn("Reached maximum number of iterations " + _parms._max_iterations + "!");
@@ -1319,7 +1370,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         _state.updateState(beta, gginfo);
         if (!_parms._lambda_search)
           updateProgress(false);
-        return !timeout() && !_job.stop_requested() && _state._iter < _parms._max_iterations;
+        return !stop_requested() && _state._iter < _parms._max_iterations;
       } else {
         GLMGradientInfo gginfo = (GLMGradientInfo) ginfo;
         if(gginfo._gradient == null)
@@ -1330,7 +1381,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
           updateProgress(true);
         boolean converged = _state.converged();
         if (converged) Log.info(LogMsg(_state.convergenceMsg));
-        return !timeout() && !_job.stop_requested() && !converged && _state._iter < _parms._max_iterations;
+        return !stop_requested() && !converged && _state._iter < _parms._max_iterations;
       }
     }
 
@@ -1341,7 +1392,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         updateProgress(true);
       boolean converged = _state.converged();
       if(converged) Log.info(LogMsg(_state.convergenceMsg));
-      return !_job.stop_requested() && !converged && _state._iter < _parms._max_iterations ;
+      return !stop_requested() && !converged && _state._iter < _parms._max_iterations ;
     }
 
     private transient long _scoringInterval = SCORING_INTERVAL_MSEC;
@@ -1882,6 +1933,9 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
           gt = new GLMBinomialGradientTask(_job == null?null:_job._key,_dinfo,_parms,_l2pen, beta).doAll(_dinfo._adaptedFrame);
         else if(_parms._family == Family.gaussian && _parms._link == Link.identity)
           gt = new GLMGaussianGradientTask(_job == null?null:_job._key,_dinfo,_parms,_l2pen, beta).doAll(_dinfo._adaptedFrame);
+        else if (_parms._family.equals(Family.negativebinomial))
+          gt =  new GLMNegativeBinomialGradientTask(_job == null?null:_job._key,_dinfo,
+                  _parms,_l2pen, beta).doAll(_dinfo._adaptedFrame);
         else if(_parms._family == Family.poisson && _parms._link == Link.log)
           gt = new GLMPoissonGradientTask(_job == null?null:_job._key,_dinfo,_parms,_l2pen, beta).doAll(_dinfo._adaptedFrame);
         else if(_parms._family == Family.quasibinomial)
@@ -2041,7 +2095,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         for (int i = 0; i < v.length(); ++i) {
           if (!v.isNA(i) && map[i] != -1) {
             int idx = map == null ? i : map[i];
-            if (idx > _dinfo.numStart() && idx < _dinfo.fullN()) {
+            if (idx >= _dinfo.numStart() && idx < _dinfo.fullN()) {
               _dinfo._normSub[idx - _dinfo.numStart()] = v.at(i);
             } else {
               // categorical or Intercept, will be ignored
@@ -2055,7 +2109,7 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
         for (int i = 0; i < v.length(); ++i) {
           if (!v.isNA(i) && map[i] != -1) {
             int idx = map == null ? i : map[i];
-            if (idx > _dinfo.numStart() && idx < _dinfo.fullN()) {
+            if (idx >= _dinfo.numStart() && idx < _dinfo.fullN()) {
               _dinfo._normMul[idx - _dinfo.numStart()] = 1.0 / v.at(i);
             } else {
               // categorical or Intercept, will be ignored
@@ -2182,5 +2236,63 @@ public class GLM extends ModelBuilder<GLMModel,GLMParameters,GLMOutput> {
     }
   }
 
+  static class PlugValuesImputer implements DataInfo.Imputer {
+    private final Frame _plug_vals;
+
+    public PlugValuesImputer(Frame plugValues) {
+      _plug_vals = plugValues;
+    }
+
+    @Override
+    public int imputeCat(String name, Vec v, boolean useAllFactorLevels) {
+      String[] domain = v.domain();
+      Vec pvec = pvec(name);
+      String value;
+      if (pvec.isCategorical()) {
+        value = pvec.domain()[(int) pvec.at(0)];
+      } else if (pvec.isString()) {
+        value = pvec.stringAt(0);
+      } else {
+        throw new IllegalStateException("Plug value for a categorical column `" + name + "` cannot by of type " + pvec.get_type_str() + "!");
+      }
+      int valueIndex = ArrayUtils.find(domain, value);
+      if (valueIndex < 0) {
+        throw new IllegalStateException("Plug value `" + value + "` of column `" + name + "` is not a member of the column's domain!");
+      }
+      return valueIndex;
+    }
+
+    @Override
+    public double imputeNum(String name, Vec v) {
+      Vec pvec = pvec(name);
+      if (v.isNumeric() || v.isTime()) {
+        return pvec.at(0);
+      } else {
+        throw new IllegalStateException("Plug value for a column `" + name + "` of type " + v.get_type_str() + " cannot by of type " + pvec.get_type_str() + "!");
+      }
+    }
+
+    @Override
+    public double[] imputeInteraction(String name, InteractionWrappedVec iv, double[] means) {
+      if (iv.isNumericInteraction()) {
+        return new double[]{imputeNum(name, iv)};
+      }
+      assert iv.v1Domain() == null || iv.v2Domain() == null; // case when both vecs are categorical is handled by imputeCat
+      String[] domain = iv.v1Domain() != null ? iv.v1Domain() : iv.v2Domain();
+      double[] vals = new double[domain.length];
+      for (int i = 0; i < domain.length; i++) {
+        vals[i] = pvec(name + "." + domain[i]).at(0);
+      }
+      return vals;
+    }
+
+    private Vec pvec(String name) {
+      Vec pvec = _plug_vals.vec(name);
+      if (pvec == null) {
+        throw new IllegalStateException("Plug value for column `" + name + "` is not defined!");
+      }
+      return pvec;
+    }
+  }
 
 }

@@ -25,22 +25,21 @@ class H2ONaiveBayesEstimator(H2OEstimator):
     """
 
     algo = "naivebayes"
+    param_names = {"model_id", "nfolds", "seed", "fold_assignment", "fold_column", "keep_cross_validation_models",
+                   "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "training_frame",
+                   "validation_frame", "response_column", "ignored_columns", "ignore_const_cols",
+                   "score_each_iteration", "balance_classes", "class_sampling_factors", "max_after_balance_size",
+                   "max_confusion_matrix_size", "max_hit_ratio_k", "laplace", "min_sdev", "eps_sdev", "min_prob",
+                   "eps_prob", "compute_metrics", "max_runtime_secs", "export_checkpoints_dir"}
 
     def __init__(self, **kwargs):
         super(H2ONaiveBayesEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "nfolds", "seed", "fold_assignment", "fold_column", "keep_cross_validation_models",
-                      "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "training_frame",
-                      "validation_frame", "response_column", "ignored_columns", "ignore_const_cols",
-                      "score_each_iteration", "balance_classes", "class_sampling_factors", "max_after_balance_size",
-                      "max_confusion_matrix_size", "max_hit_ratio_k", "laplace", "min_sdev", "eps_sdev", "min_prob",
-                      "eps_prob", "compute_metrics", "max_runtime_secs", "export_checkpoints_dir"}
-        if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
                 self._id = pvalue
                 self._parms["model_id"] = pvalue
-            elif pname in names_list:
+            elif pname in self.param_names:
                 # Using setattr(...) will invoke type-checking of the arguments
                 setattr(self, pname, pvalue)
             else:
@@ -112,7 +111,7 @@ class H2ONaiveBayesEstimator(H2OEstimator):
         """
         Whether to keep the cross-validation models.
 
-        Type: ``bool``  (default: ``False``).
+        Type: ``bool``  (default: ``True``).
         """
         return self._parms.get("keep_cross_validation_models")
 
@@ -163,8 +162,7 @@ class H2ONaiveBayesEstimator(H2OEstimator):
 
     @training_frame.setter
     def training_frame(self, training_frame):
-        assert_is_type(training_frame, None, H2OFrame)
-        self._parms["training_frame"] = training_frame
+        self._parms["training_frame"] = H2OFrame._validate(training_frame, 'training_frame')
 
 
     @property
@@ -178,8 +176,7 @@ class H2ONaiveBayesEstimator(H2OEstimator):
 
     @validation_frame.setter
     def validation_frame(self, validation_frame):
-        assert_is_type(validation_frame, None, H2OFrame)
-        self._parms["validation_frame"] = validation_frame
+        self._parms["validation_frame"] = H2OFrame._validate(validation_frame, 'validation_frame')
 
 
     @property

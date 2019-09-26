@@ -36,17 +36,21 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
    *  we can return built Model. */
   public final M get() { assert _job._result == _result; return _job.get(); }
   public final boolean isStopped() { return _job.isStopped(); }
-
+  
   // Key of the model being built; note that this is DIFFERENT from
   // _job._result if the Job is being shared by many sub-models
   // e.g. cross-validation.
   protected Key<M> _result;  // Built Model key
   public final Key<M> dest() { return _result; }
 
-  private long _start_time; //start time in msecs - only used for time-based stopping
+  private Countdown _build_model_countdown;
+  private Countdown _build_step_countdown;
+  private void startClock() {
+    _build_model_countdown = Countdown.fromSeconds(_parms._max_runtime_secs);
+    _build_model_countdown.start();
+  }
   protected boolean timeout() {
-    assert(_start_time > 0) : "Must set _start_time for each individual model.";
-    return _parms._max_runtime_secs > 0 && System.currentTimeMillis() - _start_time > (long) (_parms._max_runtime_secs * 1e3);
+    return _build_step_countdown != null ? _build_step_countdown.timedOut() : _build_model_countdown.timedOut();
   }
   protected boolean stop_requested() {
     return _job.stop_requested() || timeout();
@@ -87,7 +91,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
    *  default settings. */
   protected ModelBuilder(P parms, boolean startup_once) { this(parms,startup_once,"hex.schemas."); }
   protected ModelBuilder(P parms, boolean startup_once, String externalSchemaDirectory ) {
-    String base = getClass().getSimpleName().toLowerCase();
+    String base = getName();
     if (!startup_once)
       throw H2O.fail("Algorithm " + base + " registration issue. It can only be called at startup.");
     _job = null;
@@ -236,6 +240,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       res._output._job = _job;
       res._output.stopClock();
     }
+    Log.info("Completing model "+ reskey);
   }
 
   private void saveModelCheckpointIfConfigured() {
@@ -263,35 +268,34 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
    * @return model job
    */
   public Job<M> trainModelOnH2ONode() {
-    if (H2O.ARGS.client) {
-      if (error_count() > 0)
-        throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
-      RemoteTrainModelTask tmt = new RemoteTrainModelTask(_job, _job._result, _parms);
-      H2ONode leader = H2O.CLOUD.leader();
-      new RPC<>(leader, tmt).call().get();
-      return _job;
-    } else {
-      return trainModel(); // use directly
-    }
+    if (error_count() > 0)
+      throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
+    TrainModelRunnable trainModel = new TrainModelRunnable(this);
+    H2O.runOnH2ONode(trainModel);
+    return _job;
   }
 
-  private static class RemoteTrainModelTask extends DTask<RemoteTrainModelTask> {
+  private static class TrainModelRunnable extends H2O.RemoteRunnable<TrainModelRunnable> {
+    private transient ModelBuilder _mb;
     private Job<Model> _job;
     private Key<Model> _key;
     private Model.Parameters _parms;
     @SuppressWarnings("unchecked")
-    private RemoteTrainModelTask(Job job, Key key, Model.Parameters parms) {
-      _job = (Job<Model>) job;
-      _key = (Key<Model>) key;
-      _parms = parms;
+    private TrainModelRunnable(ModelBuilder mb) {
+      _mb = mb;
+      _job = (Job<Model>) _mb._job;
+      _key = _job._result;
+      _parms = _mb._parms;
     }
     @Override
-    public void compute2() {
-      ModelBuilder mb = ModelBuilder.make(_parms.algoName(), _job, _key);
-      mb._parms = _parms;
-      mb.init(false); // validate parameters
-      mb.trainModel();
-      tryComplete();
+    public void setupOnRemote() {
+      _mb = ModelBuilder.make(_parms.algoName(), _job, _key);
+      _mb._parms = _parms;
+      _mb.init(false); // validate parameters
+    }
+    @Override
+    public void run() {
+      _mb.trainModel();
     }
   }
 
@@ -299,7 +303,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   final public Job<M> trainModel() {
     if (error_count() > 0)
       throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
-    _start_time = System.currentTimeMillis();
+    startClock();
     if( !nFoldCV() )
       return _job.start(trainModelImpl(), _parms.progressUnits(), _parms._max_runtime_secs);
 
@@ -313,12 +317,10 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
                         @Override
                         public boolean onExceptionalCompletion(Throwable ex, CountedCompleter caller) {
                           Log.warn("Model training job "+_job._description+" completed with exception: "+ex);
-                          if (_job._result != null) {
-                            try {
-                              _job._result.remove(); //ensure there's no incomplete model left for manipulation after crash or cancellation
-                            } catch (Exception logged) {
-                              Log.warn("Exception thrown when removing result from job "+ _job._description, logged);
-                            }
+                          try {
+                            Keyed.remove(_job._result); //ensure there's no incomplete model left for manipulation after crash or cancellation
+                          } catch (Exception logged) {
+                            Log.warn("Exception thrown when removing result from job "+ _job._description, logged);
                           }
                           return true;
                         }
@@ -340,26 +342,76 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       setTrain(fr);
     if (error_count() > 0)
       throw H2OModelBuilderIllegalArgumentException.makeFromBuilder(this);
-    _start_time = System.currentTimeMillis();
+    startClock();
     if( !nFoldCV() ) trainModelImpl().compute2();
     else computeCrossValidation();
     return _result.get();
+  }
+
+  /**
+   * Train a model as part of a larger job. The model will be built on a non-client node.
+   *
+   * @param job containing job
+   * @param result key of the resulting model
+   * @param params model parameters
+   * @param fr input frame, ignored if null
+   * @param <MP> Model.Parameters
+   * @return instance of a Model
+   */
+  public static <MP extends Model.Parameters> Model trainModelNested(Job<?> job, Key<Model> result, MP params, Frame fr) {
+    H2O.runOnH2ONode(new TrainModelNestedRunnable(job, result, params, fr));
+    return result.get();
+  }
+
+  private static class TrainModelNestedRunnable extends H2O.RemoteRunnable<TrainModelNestedRunnable> {
+    private Job<?> _job;
+    private Key<Model> _key;
+    private Model.Parameters _parms;
+    private Frame _fr;
+    private TrainModelNestedRunnable(Job<?> job, Key<Model> key, Model.Parameters parms, Frame fr) {
+      _job = job;
+      _key = key;
+      _parms = parms;
+      _fr = fr;
+    }
+    @Override
+    public void run() {
+      ModelBuilder mb = ModelBuilder.make(_parms.algoName(), _job, _key);
+      mb._parms = _parms;
+      mb.trainModelNested(_fr);
+    }
   }
 
   /** Model-specific implementation of model training
    * @return A F/J Job, which, when executed, does the build.  F/J is NOT started.  */
   abstract protected Driver trainModelImpl();
 
+  @Deprecated protected int nModelsInParallel() { return 0; }
   /**
    * How many should be trained in parallel during N-fold cross-validation?
    * Train all CV models in parallel when parallelism is enabled, otherwise train one at a time
    * Each model can override this logic, based on parameters, dataset size, etc.
    * @return How many models to train in parallel during cross-validation
    */
-  protected int nModelsInParallel() {
-    if (!_parms._parallelize_cross_validation || _parms._max_runtime_secs != 0) return 1; //user demands serial building (or we need to honor the time constraints for all CV models equally)
-    if (_train.byteSize() < 1e6) return _parms._nfolds; //for small data, parallelize over CV models
-    return 1; //safe fallback
+  protected int nModelsInParallel(int folds) {
+    int n = nModelsInParallel();
+    if (n > 0) return n;
+    return nModelsInParallel(folds, 1);
+  }
+
+  protected int nModelsInParallel(int folds, int defaultParallelization) {
+    if (!_parms._parallelize_cross_validation) return 1; //user demands serial building (or we need to honor the time constraints for all CV models equally)
+    int parallelization = defaultParallelization;
+    if (_train.byteSize() < 1e6) parallelization = folds; //for small data, parallelize over CV models
+    // TODO: apply better heuristic, estimating parallelization based on H2O.getCloudSize() and H2O.ARGS.nthreads
+    return Math.min(parallelization, H2O.getCloudSize()*H2O.ARGS.nthreads);
+  }
+
+  private double maxRuntimeSecsPerModel(int cvModelsCount, int parallelization) {
+    return cvModelsCount > 0
+        ? _parms._max_runtime_secs / Math.ceil((double)cvModelsCount / parallelization + 1)
+//        ? _parms._max_runtime_secs * cvModelsCount / (cvModelsCount + 1) / Math.ceil((double)cvModelsCount / parallelization)
+        : _parms._max_runtime_secs;
   }
 
   // Work for each requested fold
@@ -379,7 +431,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   public void computeCrossValidation() {
     assert _job.isRunning();    // main Job is still running
     _job.setReadyForView(false); //wait until the main job starts to let the user inspect the main job
-    final Integer N = nFoldWork();
+    final int N = nFoldWork();
     init(false);
     ModelBuilder<M, P, O>[] cvModelBuilders = null;
     try {
@@ -401,7 +453,8 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       ModelMetrics.MetricBuilder mbs[] = cv_scoreCVModels(N, weights, cvModelBuilders);
 
       // Step 6: Build the main model
-      buildMainModel();
+      long time_allocated_to_main_model = (long)(maxRuntimeSecsPerModel(N, nModelsInParallel(N)) * 1e3);
+      buildMainModel(time_allocated_to_main_model);
 
       // Step 7: Combine cross-validation scores; compute main model x-val
       // scores; compute gains/lifts
@@ -419,7 +472,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
           DKV.remove(mb._parms._train, fs);
           DKV.remove(mb._parms._valid, fs);
           DKV.remove(Key.make(mb.getPredictionKey()), fs);
-          mb._result.remove(fs);
+          Keyed.remove(mb._result, fs, true);
         }
         fs.blockForPending();
       }
@@ -480,7 +533,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       }.doAll(2*N,Vec.T_NUM,folds_and_weights).outputFrame().vecs();
 
     if (_parms._keep_cross_validation_fold_assignment)
-      DKV.put(new Frame(Key.<Frame>make("cv_fold_assignment_" + _result.toString()), new String[]{"fold_assignment"}, new Vec[]{foldAssignment.makeCopy()}));
+      DKV.put(new Frame(Key.<Frame>make("cv_fold_assignment_" + _result.toString()), new String[]{"fold_assignment"}, new Vec[]{foldAssignment}));
     if( _parms._fold_column == null && !_parms._keep_cross_validation_fold_assignment) foldAssignment.remove();
     if( origWeightsName == null ) origWeight.remove(); // Cleanup temp
 
@@ -503,6 +556,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
     ModelBuilder<M, P, O>[] cvModelBuilders = new ModelBuilder[N];
     List<Frame> cvFramesForFailedModels = new ArrayList<>();
+    double cv_max_runtime_secs = maxRuntimeSecsPerModel(N, nModelsInParallel(N));
     for( int i=0; i<N; i++ ) {
       String identifier = origDest + "_cv_" + (i+1);
       // Training/Validation share the same data, but will have exclusive weights
@@ -525,6 +579,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       cv_mb._parms._valid = cvValid._key;
       cv_mb._parms._fold_assignment = Model.Parameters.FoldAssignmentScheme.AUTO;
       cv_mb._parms._nfolds = 0; // Each submodel is not itself folded
+      cv_mb._parms._max_runtime_secs = cv_max_runtime_secs;
       cv_mb.clearValidationErrors(); // each submodel gets its own validation messages and error_count()
 
       // Error-check all the cross-validation Builders before launching any
@@ -558,7 +613,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
   // Step 4: Run all the CV models and launch the main model
   public void cv_buildModels(int N, ModelBuilder<M, P, O>[] cvModelBuilders ) {
-    bulkBuildModels("cross-validation", _job, cvModelBuilders, nModelsInParallel(), 0 /*no job updates*/);
+    bulkBuildModels("cross-validation", _job, cvModelBuilders, nModelsInParallel(N), 0 /*no job updates*/);
     cv_computeAndSetOptimalParameters(cvModelBuilders);
   }
 
@@ -584,7 +639,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         throw new Job.JobCancelledException();
       }
       Log.info("Building " + modelType + " model " + (i + 1) + " / " + N + ".");
-      modelBuilders[i]._start_time = System.currentTimeMillis();
+      modelBuilders[i].startClock();
       submodel_tasks[i] = H2O.submitTask(modelBuilders[i].trainModelImpl());
       if(++nRunning == parallelization) { //piece-wise advance in training the models
         while (nRunning > 0) try {
@@ -659,16 +714,18 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   }
 
   // Step 6: build the main model
-  private void buildMainModel() {
+  private void buildMainModel(long max_runtime_millis) {
     if (_job.stop_requested()) {
       Log.info("Skipping main model");
       throw new Job.JobCancelledException();
     }
     assert _job.isRunning();
     Log.info("Building main model.");
-    _start_time = System.currentTimeMillis();
+    Log.info("Remaining time for main model (ms): " + max_runtime_millis);
+    _build_step_countdown = new Countdown(max_runtime_millis, true);
     H2O.H2OCountedCompleter mm = H2O.submitTask(trainModelImpl());
     mm.join();  // wait for completion
+    _build_step_countdown = null;
   }
 
   // Step 7: Combine cross-validation scores; compute main model x-val scores; compute gains/lifts
@@ -727,6 +784,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       Log.info(count+" CV models were removed");
     }
 
+    mainModel._output._total_run_time = _build_model_countdown.elapsedTime();
     // Now, the main model is complete (has cv metrics)
     DKV.put(mainModel);
   }
@@ -780,7 +838,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   protected boolean logMe() { return true; }
 
   abstract public boolean isSupervised();
-
+  
   protected transient Vec _response; // Handy response column
   protected transient Vec _vresponse; // Handy response column
   protected transient Vec _offset; // Handy offset column
@@ -788,7 +846,7 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
   protected transient Vec _fold; // fold id column
   protected transient String[] _origNames; // only set if ModelBuilder.encodeFrameCategoricals() changes the training frame
   protected transient String[][] _origDomains; // only set if ModelBuilder.encodeFrameCategoricals() changes the training frame
-
+  
   public boolean hasOffsetCol(){ return _parms._offset_column != null;} // don't look at transient Vec
   public boolean hasWeightCol(){return _parms._weights_column != null;} // don't look at transient Vec
   public boolean hasFoldCol(){return _parms._fold_column != null;} // don't look at transient Vec
@@ -1151,12 +1209,10 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
           hide("_quantile_alpha", "Quantile (alpha) is only used for Quantile regression.");
         }
         if (expensive) checkDistributions();
-        _nclass = _response.isCategorical() ? _response.cardinality() : 1;
-        if (_parms._distribution == DistributionFamily.quasibinomial) {
-          _nclass = 2;
+        _nclass = init_getNClass();
+        if (_parms._check_constant_response && _response.isConst()) {
+          error("_response", "Response cannot be constant.");
         }
-        if (_response.isConst())
-          error("_response","Response cannot be constant.");
       }
       if (! _parms._balance_classes)
         hide("_max_after_balance_size", "Balance classes is false, hide max_after_balance_size");
@@ -1272,8 +1328,10 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       if (restructured)
         _train.restructure(_train.names(), vecs);
     }
-    assert (!expensive || _valid==null || Arrays.equals(_train._names, _valid._names) || _parms._categorical_encoding == Model.Parameters.CategoricalEncodingScheme.Binary);
-    if (_valid!=null && !Arrays.equals(_train._names, _valid._names) && _parms._categorical_encoding == Model.Parameters.CategoricalEncodingScheme.Binary) {
+    boolean names_may_differ = _parms._categorical_encoding == Model.Parameters.CategoricalEncodingScheme.Binary;
+    boolean names_differ = _valid !=null && !Arrays.equals(_train._names, _valid._names);
+    assert (!expensive || names_may_differ || !names_differ);
+    if (names_differ && names_may_differ) {
       for (String name : _train._names)
         assert(ArrayUtils.contains(_valid._names, name)) : "Internal error during categorical encoding: training column " + name + " not in validation frame with columns " + Arrays.toString(_valid._names);
     }
@@ -1296,16 +1354,24 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
         if (_parms._stopping_metric == ScoreKeeper.StoppingMetric.deviance && !getClass().getSimpleName().contains("GLM")) {
           error("_stopping_metric", "Stopping metric cannot be deviance for classification.");
         }
-        if (nclasses()!=2 && _parms._stopping_metric == ScoreKeeper.StoppingMetric.AUC) {
-          error("_stopping_metric", "Stopping metric cannot be AUC for multinomial classification.");
+        if (nclasses()!=2 && (_parms._stopping_metric == ScoreKeeper.StoppingMetric.AUC || _parms._stopping_metric
+                == ScoreKeeper.StoppingMetric.AUCPR)) {
+          error("_stopping_metric", "Stopping metric cannot be AUC or AUCPR for multinomial " +
+                  "classification.");
         }
       } else {
         if (_parms._stopping_metric == ScoreKeeper.StoppingMetric.misclassification ||
                 _parms._stopping_metric == ScoreKeeper.StoppingMetric.AUC ||
-                _parms._stopping_metric == ScoreKeeper.StoppingMetric.logloss)
+                _parms._stopping_metric == ScoreKeeper.StoppingMetric.logloss || _parms._stopping_metric
+                == ScoreKeeper.StoppingMetric.AUCPR)
         {
           error("_stopping_metric", "Stopping metric cannot be " + _parms._stopping_metric.toString() + " for regression.");
         }
+      }
+    }
+    if (_parms._stopping_metric == ScoreKeeper.StoppingMetric.custom || _parms._stopping_metric == ScoreKeeper.StoppingMetric.custom_increasing) {
+      if (_parms._custom_metric_func == null) {
+        error("_stopping_metric", "Custom metric function needs to be defined in order to use it for early stopping.");
       }
     }
     if (_parms._max_runtime_secs < 0) {
@@ -1444,6 +1510,14 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
 
   protected String getSysProperty(String name, String def) {
     return System.getProperty(H2O.OptArgs.SYSTEM_PROP_PREFIX + name, def);
+  }
+
+  protected int init_getNClass() {
+    int nclass = _response.isCategorical() ? _response.cardinality() : 1;
+    if (_parms._distribution == DistributionFamily.quasibinomial) {
+      nclass = 2;
+    }
+    return nclass;
   }
 
   public void checkDistributions() {
@@ -1615,16 +1689,24 @@ abstract public class ModelBuilder<M extends Model<M,P,O>, P extends Model.Param
       }
       i++;
     }
-
+    MathUtils.SimpleStats simpleStats = new MathUtils.SimpleStats(numMetrics);
     for (i=0;i<N;++i)
-      stats.add(vals[i],1);
+      simpleStats.add(vals[i],1);
     for (i=0;i<numMetrics;++i) {
-      table.set(i, 0, (float)stats.mean()[i]);
-      table.set(i, 1, (float)stats.sigma()[i]);
+      table.set(i, 0, (float)simpleStats.mean()[i]);
+      table.set(i, 1, (float)simpleStats.sigma()[i]);
     }
-
     Log.info(table);
     return table;
+  }
+
+  /**
+   * Overridable Model Builder name used in generated code, in case the name of the ModelBuilder class is not suitable.
+   *
+   * @return Name of the builder to be used in generated code
+   */
+  public String getName() {
+    return getClass().getSimpleName().toLowerCase();
   }
 
 }

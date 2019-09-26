@@ -24,6 +24,7 @@ import java.io.BufferedWriter;
 import java.io.FileWriter;
 import java.util.*;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 
 public class DRFTest extends TestUtil {
@@ -1685,4 +1686,77 @@ public class DRFTest extends TestUtil {
       Scope.exit();
     }
   }
+  
+  @Test public void testConstantResponse() { 
+    Scope.enter();
+    Frame tfr=null;
+    DRFModel drf = null;
+    try {
+        tfr = parse_test_file(Key.make("iris.hex"), "./smalldata/iris/iris.csv");
+        tfr.add("constantCol",tfr.anyVec().makeCon(1));
+        DKV.put(tfr);
+        DRFModel.DRFParameters parms = new DRFModel.DRFParameters();
+        parms._train = tfr._key;
+        parms._response_column = "constantCol";
+        parms._ntrees = 1;
+        parms._max_depth = 3;
+        parms._seed = 12;
+        parms._check_constant_response = false; //Allow constant response column
+        // Build model
+        drf = new DRF(parms).trainModel().get();
+    } finally{
+        if (tfr != null) tfr.remove();
+        if (drf != null) drf.remove();
+    }
+    Scope.exit(); 
+  }
+
+  @Test public void testScoreFeatureFrequencies() {
+    Scope.enter();
+    try {
+      Frame train = parse_test_file("./smalldata/logreg/prostate.csv");
+      train.toCategoricalCol("CAPSULE");
+      Scope.track(train);
+
+      DRFModel.DRFParameters parms = new DRFModel.DRFParameters();
+      parms._train = train._key;
+      parms._response_column = "CAPSULE";
+      parms._ntrees = 5;
+      parms._seed = 0xC0B0L;
+      parms._ignored_columns = new String[]{"ID"};
+
+      SharedTreeModel<?, ?, ?> model = new DRF(parms).trainModel().get();
+      Scope.track_generic(model);
+
+      Frame ff = model.scoreFeatureFrequencies(train, Key.<Frame>make("ff_prostate"));
+      Scope.track(ff);
+
+      assertArrayEquals(model._output.features(), ff.names());
+      assertEquals(train.numRows(), ff.numRows());
+
+      // Check on a single row
+      Frame testRow = Scope.track(train.deepSlice(new long[]{0}, null));
+
+      Frame ffTestRow = model.scoreFeatureFrequencies(testRow, Key.<Frame>make("ff_prostate"));
+      Scope.track(ffTestRow);
+      
+      long ffTotal = 0;
+      for (int i = 0; i < ffTestRow.numCols(); i++) {
+        ffTotal += ffTestRow.vec(i).at8(0);
+      }
+      
+      Frame lnAssignment = model.scoreLeafNodeAssignment(
+              testRow, Model.LeafNodeAssignment.LeafNodeAssignmentType.Path, Key.<Frame>make("lna_prostate"));
+      Scope.track(lnAssignment);
+      long totalPathLength = 0;
+      for (String path : ArrayUtils.flat(lnAssignment.domains())) {
+        totalPathLength += path.length();
+      }
+
+      assertEquals(totalPathLength, ffTotal);
+    } finally {
+      Scope.exit();
+    }
+  }
+
 }

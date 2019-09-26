@@ -75,12 +75,14 @@ Defining a K-Means Model
   - ```eigen`` or ``Eigen``: *k* columns per categorical feature, keeping projections of one-hot-encoded matrix onto *k*-dim eigen space only
   - ``label_encoder`` or ``LabelEncoder``:  Convert every enum into the integer of its index (for example, level 0 -> 0, level 1 -> 1, etc.)
 
+-  `export_checkpoints_dir <algo-params/export_checkpoints_dir.html>`__: Specify a directory to which generated models will automatically be exported.
+
 Interpreting a K-Means Model
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 By default, the following output displays:
 
--  A graph of the scoring history (number of iterations vs. average within the cluster's sum of squares)
+-  A graph of the scoring history (number of iterations vs. within the cluster's sum of squares)
 -  Output (model category, validation metrics if applicable, and centers std)
 -  Model Summary Model Summary (number of clusters, number of categorical columns, number of iterations, total within sum of squares, total sum of squares, total between the sum of squares. Note that Flow also returns the number of rows.)
 -  Scoring history (duration, number of iterations, number of reassigned observations, number of within cluster sum of squares)

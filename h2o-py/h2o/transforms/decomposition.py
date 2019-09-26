@@ -1,12 +1,11 @@
 from ..estimators.estimator_base import H2OEstimator
-from h2o.utils.typechecks import Enum
-from h2o.utils.typechecks import assert_is_type
+from h2o.frame import H2OFrame
+from h2o.utils.typechecks import assert_is_type, Enum
+
 
 
 class H2OPCA(H2OEstimator):
-    """
-    Principal Component Analysis
-    """
+    """ Principal Component Analysis """
     algo = "pca"
 
     def __init__(self, model_id=None, k=None, max_iterations=None, seed=None,
@@ -63,14 +62,14 @@ class H2OPCA(H2OEstimator):
             ``"mtj_evd_symmmatrix"``, ``"mtj_svd_densematrix"``, ``"jama"``  (default: ``"mtj_evd_symmmatrix"``).
         :param bool ignore_const_cols: If true, will ignore constant columns.  Default is True.
         :param bool impute_missing:  whether to impute NA/missing values.
-        :param bool compute_metrics: whether to compute metrics on training data.  Default to True
+        :param bool compute_metrics: whether to compute metrics on training data.  Default is True.
 
         :returns: A new instance of H2OPCA.
 
         """
         super(H2OPCA, self).__init__()
         self._parms = locals()
-        self._parms = {k: v for k, v in self._parms.items() if k != "self"}
+        self._parms = {k: v for k, v in self._parms.items() if k not in ('self', '__class__')}
 
         assert_is_type(pca_method, Enum("GramSVD", "Power", "GLRM", "Randomized"))
         self._parms["pca_method"] = pca_method
@@ -81,7 +80,6 @@ class H2OPCA(H2OEstimator):
 
     def fit(self, X, y=None, **params):
         return super(H2OPCA, self).fit(X)
-
 
     def transform(self, X, y=None, **params):
         """
@@ -95,11 +93,12 @@ class H2OPCA(H2OEstimator):
         """
         return self.predict(X)
 
+
 class H2OSVD(H2OEstimator):
-    """Singular Value Decomposition"""
+    """ Singular Value Decomposition """
     algo = "svd"
 
-    def __init__(self, nv=None, max_iterations=None, transform=None, seed=None,
+    def __init__(self, nv=None, max_iterations=None, transform="NONE", seed=None,
                  use_all_factor_levels=None, svd_method="GramSVD"):
         """
         Singular value decomposition of an H2OFrame.
@@ -141,10 +140,8 @@ class H2OSVD(H2OEstimator):
         self._parms["transform"]=transform
         self._parms['_rest_version'] = 99
 
-
     def fit(self, X, y=None, **params):
         return super(H2OSVD, self).fit(X)
-
 
     def transform(self, X, y=None, **params):
         """

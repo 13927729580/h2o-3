@@ -77,7 +77,7 @@ public class Frame extends Lockable<Frame> {
     Key[] keys = tempFrame.keys();
     for( int i=0; i<keys.length; i++ )
       if( baseFrame.find(keys[i]) == -1 ) //only delete vecs that aren't shared
-        keys[i].remove();
+        Keyed.remove(keys[i]);
     DKV.remove(tempFrame._key); //delete the frame header
   }
 
@@ -166,8 +166,8 @@ public class Frame extends Lockable<Frame> {
 
     // Require all Vecs already be installed in the K/V store
     for( Vec vec : vecs ) DKV.prefetch(vec._key);
-    for( Vec vec : vecs ) {
-      assert DKV.get(vec._key) != null : " null vec: "+vec._key;
+    for( int i = 0; i < vecs.length; i++ ) {
+      assert DKV.get(vecs[i]._key) != null : " null vec: " + vecs[i]._key + "; " + (names != null ? "name: " + names[i] : "index: " + i);
     }
 
     // Always require names
@@ -316,7 +316,7 @@ public class Frame extends Lockable<Frame> {
    */
   public Key<Vec>[] keys() { return _keys; }
   public Iterable<Key<Vec>> keysList() { return Arrays.asList(_keys); }
-
+  
   /** The internal array of Vecs.  For efficiency Frames contain an array of
    *  Vec Keys - and the Vecs themselves are lazily loaded from the {@link DKV}.
    *  @return the internal array of Vecs */
@@ -435,6 +435,13 @@ public class Frame extends Lockable<Frame> {
     public Key<Frame> _frame;
     public String _column_name;
 
+    public VecSpecifier() {
+    }
+
+    public VecSpecifier(Key<Frame> frame, String column_name) {
+      _frame = frame;
+      _column_name = column_name;
+    }
 
     public Vec vec() {
       Value v = DKV.get(_frame);
@@ -442,6 +449,21 @@ public class Frame extends Lockable<Frame> {
       Frame f = v.get();
       if (null == f) return null;
       return f.vec(_column_name);
+    }
+
+    /**
+     * @param vecSpecifiers An Array of vectors specifiers to extract column names from. May not be null.
+     * @return An array of String with names of the columns represented by each given VecSpecifier. Possibly empty.
+     * @throws NullPointerException When vecSpecifiers argument is null.
+     */
+    public static String[] vecNames(final VecSpecifier[] vecSpecifiers) throws NullPointerException {
+      Objects.requireNonNull(vecSpecifiers);
+      final String[] vecNames = new String[vecSpecifiers.length];
+
+      for (int i = 0; i < vecSpecifiers.length; i++) {
+        vecNames[i] = vecSpecifiers[i]._column_name;
+      }
+      return vecNames;
     }
   }
 
@@ -776,7 +798,7 @@ public class Frame extends Lockable<Frame> {
 
   /** Actually remove/delete all Vecs from memory, not just from the Frame.
    *  @return the original Futures, for flow-coding */
-  @Override protected Futures remove_impl(Futures fs) {
+  @Override protected Futures remove_impl(Futures fs, boolean cascade) {
     final Key[] keys = _keys;
     if( keys.length==0 ) return fs;
 
@@ -806,6 +828,58 @@ public class Frame extends Lockable<Frame> {
     Vec.bulk_remove(keys, v.nChunks());
 
     return fs;
+  }
+
+  /**
+   * Removes this {@link Frame} object and all directly linked {@link Keyed} objects and POJOs, while retaining
+   * the keys defined by the retainedKeys parameter. Aimed to be used for removal of {@link Frame} objects pointing
+   * to shared resources (Vectors, Chuinks etc.) internally.
+   * <p>
+   * WARNING: UNSTABLE API, might be removed/replaced at any time.
+   *
+   * @param futures      An instance of {@link Futures} for synchronization
+   * @param retainedKeys A {@link Set} of keys to retain. The set may be immutable, as it shall not be modified.
+   * @return An instance of {@link Futures} for synchronization
+   */
+  public final Futures retain(final Futures futures, final Set<Key> retainedKeys) {
+    if (_key != null) DKV.remove(_key);
+
+    final Key[] delCandidateKeys = _keys;
+    if (delCandidateKeys.length == 0) return futures;
+
+    // Get the nChunks without calling anyVec - which loads all Vecs eagerly,
+    // only to delete them.  Supports Frames with some Vecs already deleted, as
+    // a Scope cleanup action might delete Vecs out of order.
+    Vec v = _col0;
+    if (v == null) {
+      Vec[] vecs = _vecs;       // Read once, in case racily being cleared
+      if (vecs != null)
+        for (Vec vec : vecs)
+          if ((v = vec) != null) // Stop on finding the 1st Vec
+            break;
+    }
+    if (v == null)             // Ok, now do DKV gets
+      for (Key<Vec> _key1 : _keys)
+        if ((v = _key1.get()) != null)
+          break;                // Stop on finding the 1st Vec
+    if (v == null)
+      return futures;
+
+    _vecs = new Vec[0];
+    setNames(new String[0]);
+    _keys = makeVecKeys(0);
+
+    final List<Key> deletedKeys= new ArrayList<>();
+    for (int i = 0; i < delCandidateKeys.length; i++) {
+      if(!retainedKeys.contains(delCandidateKeys[i])){
+        deletedKeys.add(delCandidateKeys[i]);
+      }
+    }
+
+    // Bulk dumb local remove - no JMM, no ordering, no safety.
+    Vec.bulk_remove(deletedKeys.toArray(new Key[]{}), v.nChunks());
+
+    return futures;
   }
 
   /** Write out K/V pairs, in this case Vecs. */
@@ -980,10 +1054,16 @@ public class Frame extends Lockable<Frame> {
   // Chunks in a Frame, before filling them.  This can be called in parallel
   // for different Chunk#'s (cidx); each Chunk can be filled in parallel.
   static NewChunk[] createNewChunks(String name, byte[] type, int cidx) {
+    boolean[] sparse = new boolean[type.length];
+    Arrays.fill(sparse, false);
+    return createNewChunks(name, type, cidx, sparse);
+  }
+
+  static NewChunk[] createNewChunks(String name, byte[] type, int cidx, boolean[] sparse) {
     Frame fr = (Frame) Key.make(name).get();
     NewChunk[] nchks = new NewChunk[fr.numCols()];
     for (int i = 0; i < nchks.length; i++) {
-      nchks[i] = new NewChunk(new AppendableVec(fr._keys[i], type[i]), cidx);
+      nchks[i] = new NewChunk(new AppendableVec(fr._keys[i], type[i]), cidx, sparse[i]);
     }
     return nchks;
   }
@@ -1427,6 +1507,11 @@ public class Frame extends Lockable<Frame> {
   }
 
   public static Job export(Frame fr, String path, String frameName, boolean overwrite, int nParts) {
+    return export(fr, path, frameName, overwrite, nParts, null, new CSVStreamParams());
+  }
+
+  public static Job export(Frame fr, String path, String frameName, boolean overwrite, int nParts, 
+                           String compression, CSVStreamParams csvParms) {
     boolean forceSingle = nParts == 1;
     // Validate input
     if (forceSingle) {
@@ -1442,9 +1527,22 @@ public class Frame extends Lockable<Frame> {
                 " to store part files! The target needs to be either an existing empty directory or not exist yet.");
       }
     }
+    CompressionFactory compressionFactory = compression != null ? CompressionFactory.make(compression) : null;
     Job job =  new Job<>(fr._key, "water.fvec.Frame", "Export dataset");
-    FrameUtils.ExportTaskDriver t = new FrameUtils.ExportTaskDriver(fr, path, frameName, overwrite, job, nParts);
+    FrameUtils.ExportTaskDriver t = new FrameUtils.ExportTaskDriver(
+            fr, path, frameName, overwrite, job, nParts, compressionFactory, csvParms);
     return job.start(t, fr.anyVec().nChunks());
+  }
+
+  /**
+   * @deprecated As of release 3.24.0.5, replaced by {@link #toCSV(CSVStreamParams)}}
+   */
+  @Deprecated
+  public InputStream toCSV(boolean headers, boolean hex_string) {
+    CSVStreamParams params = new CSVStreamParams()
+            .setHeaders(headers)
+            .setHexString(hex_string);
+    return toCSV(params);
   }
 
   /** Convert this Frame to a CSV (in an {@link InputStream}), that optionally
@@ -1454,12 +1552,35 @@ public class Frame extends Lockable<Frame> {
    *  returning 0 instead of -1.
    *
    *  @return An InputStream containing this Frame as a CSV */
-  public InputStream toCSV(boolean headers, boolean hex_string) {
-    return new CSVStream(this, headers, hex_string);
+  public InputStream toCSV(CSVStreamParams parms) {
+    return new CSVStream(this, parms);
+  }
+
+  public static class CSVStreamParams extends Iced<CSVStreamParams> {
+    public static final char DEFAULT_SEPARATOR = ','; 
+
+    boolean _headers = true;
+    boolean _hex_string = false;
+    char _separator = DEFAULT_SEPARATOR;
+
+    public CSVStreamParams setHeaders(boolean headers) {
+      _headers = headers;
+      return this;
+    }
+
+    public CSVStreamParams setHexString(boolean hex_string) {
+      _hex_string = hex_string;
+      return this;
+    }
+
+    public CSVStreamParams setSeparator(byte separator) {
+      _separator = (char) separator;
+      return this;
+    }
   }
 
   public static class CSVStream extends InputStream {
-    private final boolean _hex_string;
+    private final CSVStreamParams _parms;
     byte[] _line;
     int _position;
     int _chkRow;
@@ -1467,8 +1588,8 @@ public class Frame extends Lockable<Frame> {
     int _lastChkIdx;
     public volatile int _curChkIdx; // used only for progress reporting
 
-    public CSVStream(Frame fr, boolean headers, boolean hex_string) {
-      this(firstChunks(fr), headers ? fr.names() : null, fr.anyVec().nChunks(), hex_string);
+    public CSVStream(Frame fr, CSVStreamParams parms) {
+      this(firstChunks(fr), parms._headers ? fr.names() : null, fr.anyVec().nChunks(), parms);
     }
 
     private static Chunk[] firstChunks(Frame fr) {
@@ -1483,15 +1604,15 @@ public class Frame extends Lockable<Frame> {
       return chks;
     }
 
-    public CSVStream(Chunk[] chks, String[] names, int nChunks, boolean hex_string) {
+    public CSVStream(Chunk[] chks, String[] names, int nChunks, CSVStreamParams parms) {
       if (chks == null) nChunks = 0;
       _lastChkIdx = (chks != null) ? chks[0].cidx() + nChunks - 1 : -1;
-      _hex_string = hex_string;
+      _parms = parms;
       StringBuilder sb = new StringBuilder();
       if (names != null) {
         sb.append('"').append(names[0]).append('"');
         for(int i = 1; i < names.length; i++)
-          sb.append(',').append('"').append(names[i]).append('"');
+          sb.append(_parms._separator).append('"').append(names[i]).append('"');
         sb.append('\n');
       }
       _line = StringUtils.bytesOf(sb);
@@ -1510,7 +1631,7 @@ public class Frame extends Lockable<Frame> {
       BufferedString tmpStr = new BufferedString();
       for (int i = 0; i < _curChks.length; i++ ) {
         Vec v = _curChks[i]._vec;
-        if(i > 0) sb.append(',');
+        if(i > 0) sb.append(_parms._separator);
         if(!_curChks[i].isNA(_chkRow)) {
           if( v.isCategorical() ) sb.append('"').append(v.factor(_curChks[i].at8(_chkRow))).append('"');
           else if( v.isUUID() ) sb.append(PrettyPrint.UUID(_curChks[i].at16l(_chkRow), _curChks[i].at16h(_chkRow)));
@@ -1527,7 +1648,7 @@ public class Frame extends Lockable<Frame> {
             //   https://bugs.r-project.org/bugzilla/show_bug.cgi?id=15751
             //   https://stat.ethz.ch/pipermail/r-devel/2014-April/068778.html
             //   http://stackoverflow.com/questions/23072988/preserve-old-pre-3-1-0-type-convert-behavior
-            String s = _hex_string ? Double.toHexString(d) : Double.toString(d);
+            String s = _parms._hex_string ? Double.toHexString(d) : Double.toString(d);
             sb.append(s);
           }
         }
@@ -1606,9 +1727,9 @@ public class Frame extends Lockable<Frame> {
   @Override public Class<KeyV3.FrameKeyV3> makeSchema() { return KeyV3.FrameKeyV3.class; }
 
   /** Sort rows of a frame, using the set of columns as keys.  User can specify sorting direction for each sorting
-   * column in a boolean array.  For example, if we want to sort columns 0, 1, 2 and want to sort 0 in ascending
-   * direction, 1 and 2 in descending direction for frame fr, the call to make is fr.sort(new int[2]{0,1,2},
-   * new boolean[2]{true, false, false}.
+   * column in a integer array.  For example, if we want to sort columns 0, 1, 2 and want to sort 0 in ascending
+   * direction, 1 and 2 in descending direction for frame fr, the call to make is fr.sort(new int[]{0,1,2},
+   * new int[]{1, -1, -1}.
    *
    *  @return Copy of frame, sorted */
   public Frame sort( int[] cols ) {
@@ -1627,6 +1748,25 @@ public class Frame extends Lockable<Frame> {
    */
   public FrameVecRegistry frameVecRegistry() {
     return new FrameVecRegistry();
+  }
+
+  /**
+   * Returns the original frame with specific column converted to categorical
+   */
+  public Frame toCategoricalCol(int columIdx){
+    write_lock();
+    replace(columIdx, vec(columIdx).toCategoricalVec()).remove();
+    // Update frame in DKV
+    update();
+    unlock();
+    return this;
+  }
+
+  /**
+   * Returns the original frame with specific column converted to categorical
+   */
+  public Frame toCategoricalCol(String column){
+   return toCategoricalCol(find(column));
   }
 
   public class FrameVecRegistry {

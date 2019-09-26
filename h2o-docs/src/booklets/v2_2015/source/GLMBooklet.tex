@@ -16,6 +16,7 @@
 %\input{common/conf_listings_colorized.tex}  % Work in progress....  Use this for online/pdf version
 
 \usepackage{url}
+\usepackage{float}
 \def\UrlBreaks{\do\/\do-\do_}
 
 \begin{document}
@@ -77,7 +78,7 @@ Edited by: Angela Bartz
 2307 Leghorn St. \\
 Mountain View, CA 94043\\
 \bigskip
-\textcopyright \the\year \hspace{1pt} H2O.ai, Inc. All Rights Reserved. 
+\textcopyright 2016-\the\year \hspace{1pt} H2O.ai, Inc. All Rights Reserved. 
 \bigskip
 
 \monthname \hspace{1pt}  \the\year: Sixth Edition
@@ -200,7 +201,7 @@ H2O's GLM algorithm fits generalized linear models to the data by maximizing the
 H2O's GLM fits the model by solving the following likelihood optimization with parameter regularization:
  $$\max_{\beta,\beta_0} \mbox{  ( GLM Log-likelihood }  - \mbox{Regularization Penalty )} .$$
 
-The elastic net regularization penalty is the weighted sum of the $\ell_1$ and $\ell_2$ norms of the coefficients vector. It is defined as $$\lambda P_{\alpha}(\beta) = \lambda \left(\alpha \| \beta \|_1 + \frac{1}{2} (1- \alpha) \| \beta \|_2^2 \right),$$ with no penalty on the intercept term. It is implemented by subtracting $\lambda P_{\alpha}(\beta)$ from the optimized likelihood. This induces sparsity in the solution and shrinks the coefficients by imposing a penalty on their size. 
+The elastic net regularization penalty is the weighted sum of the $\ell_1$ and $\ell_2$ norms of the coefficients vector. It is defined as $$\lambda P_{\alpha}(\beta) = \lambda \left(\alpha \| \beta \|_1 + \frac{1}{2} (1- \alpha) \| \beta \|_2^2 \right),$$ with no penalty on the intercept term. It is implemented by subtracting $\lambda P_{\alpha}(\beta)$ from the optimized likelihood. This induces sparsity in the solution and shrinks the coefficients by imposing a penalty on their size. Note that maximizing the log-likelihood function with the negative regularization penalty is equivalent to minimizing the negative log-likelihood function with the regularization penalty. In the actual H2O-3 GLM code, we choose to minimize the negative log-likelihood function with the regularization penalty term.
 
 These properties are beneficial because they reduce the variance in the predictions and make the model more interpretable by selecting a subset of the given variables. For a specific $\alpha$ value, the algorithm can compute models for a single value of the tuning parameter $\lambda$ or the full regularization path as in the glmnet package for R (refer to \citetalias{glmnet}).
 
@@ -501,7 +502,7 @@ argument.
 
 \subsubsection{Tweedie Models}
 
-Tweedie distributions are a family of distributions which include gamma, normal, Poisson and their combination. It is especially useful for modeling positive continuous variables with exact zeros. The variance of the Tweedie distribution is proportional to the $p$-th power of the mean $var(y_i)=\phi \mu_i^p$. 
+Tweedie distributions are a family of distributions which include gamma, normal, Poisson and their combinations. Tweedie distributions are especially useful for modeling positive continuous variables with exact zeros. The variance of the Tweedie distribution is proportional to the $p$-th power of the mean $var(y_i)=\phi \mu_i^p$, where $\phi$ is the dispersion of the parameter and $p$ is the variance power.
 
 The Tweedie distribution is parametrized by variance power $p$. It is defined for all $p$ values except in the $(0,1)$ interval, and has the following distributions as special cases.
 
@@ -521,33 +522,82 @@ The Tweedie distribution is parametrized by variance power $p$. It is defined fo
 \waterExampleInPython
 \lstinputlisting[style=python]{GLM_Vignette_code_examples/glm_tweedie_example.py}
 
-The normal and Poisson examples have already been covered in the previous sections. For $p>1$, the model likelihood to maximize has the form: 
-$$  \max_{\beta,\beta_0} \ \sum_{i=1}^N \log(a(y_i,\phi)) + \left( \frac{1}{\phi}\left( \frac{y_i\mu_i^{1-p}}{1-p} - \kappa(\mu_i,p) \right)  \right) -\lambda  \left(  \alpha \| \beta \|_1 + \frac{1}{2}(1-\alpha)\| \beta \|_2^2  \right), $$
-where $\kappa(\mu,p) = \mu^{2-p}/(2-p)$ for $p \neq 2$ and $\kappa(\mu,p) = \log(\mu)$ for $p=2$ and where the function $a(y_i,\phi)$ is evaluated using series expansion, since it does not have an analytical solution. The link function in the GLM representation of the Tweedie distribution defaults to $g(\mu) = \mu^{q} = \eta = X\beta$ with $q=1-p$. The link power $q$ can be set to other values, including $q=0$ which is interpreted as $\log(\mu)=\eta$. 
-%
-%have the form of the distribution \\
-%link function can be taken as $\mu^{1-p}$ when p is not equal to 1\\
-%giving: link $\mu=g^{-1}(\eta)$ or $\eta=X\beta = g(\mu)$ \\
-%satisfies being the identity when p=0 cause $\eta = \mu^1$\\
-%for p=2 satisfies the inverse link $\eta = \mu^-1$\\
-%for $p=3$ satisfies the link which is the $inverse^2$ for the inverse gaussian.\\
-%so when write the distribution for the tweedie we can replace $\mu$ by Ginverse of eta and we will have Xbeta in the expression. 
-%Apart from the special cases, the density of the distribution does not have an analytic expression. The model likelihood to maximize is
+The model likelihood to maximize has the form:
 
-The corresponding deviance when $p \neq 1$ and $p\neq 2$ is equal to:
-$$D = -2 \sum_{i=1}^{N} y_i  (y_i^{1-p} - \hat{y}_i^{1-p} ) - \frac{(y_i^{2 - p} - \hat{y}_i^{2 - p})}{(2 - p)}. $$\\
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{../../../product/images/model_log_likelihood_tweedie.png}
+\end{figure}
 
-%\waterExampleInR
-%This example loads the Insurance data from the HDtweedie library, imports it into H2O and runs a tweedie model that predicts the aggregate claim loss (in thousand dollars) based on 56 predictors including the car type, job class etc.
-%\lstinputlisting[style=R]{GLM_Vignette_code_examples/glm_tweedie_example.R}
+where the function $a(y_i,\phi)$ is evaluated using an infinite series expansion and does not have an analytical solution. However, because $\phi$ is an unknown constant, $\sum_{i=1}^N\text{log}(a(y_i,\phi))$ is a constant and will be ignored. Hence, the final objective function to minimize with the penalty term is:
 
-%\waterExampleInPython
-%\lstinputlisting[style=python]{GLM_Vignette_code_examples/glm_tweedie_example.py}
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{../../../product/images/minimize_penalty.png}
+\end{figure}
 
-%----------------------------------------------------------------------
-%----------------------------------------------------------------------
+The link function in the GLM representation of the Tweedie distribution defaults to:
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{../../../product/images/link_function_tweedie.png}
+\end{figure}
+
+And $q = 1 - p$. The link power $q$ can be set to other values as well.
+
+The corresponding deviance is equal to:
+
+\begin{figure}[H]
+\centering
+\includegraphics[scale=0.5]{../../../product/images/tweedie_deviance.png}
+\end{figure}
+   
+\subsubsection{Negative Binomial Models}
+
+Negative binomial regression is a generalization of Poisson regression that loosens the restrictive assumption that the variance is equal to the mean. Instead, the variance of negative binomial is a function of its mean and parameter $\theta$, the dispersion parameter. 
+
+Let $Y$ denote a random variable with negative binomial distribution, and let $\mu$ be the mean. The variance of $Y (\sigma^2)$ will be $\sigma^2 = \mu + \theta\mu^2$. The possible values of $Y$ are non-negative integers like 0, 1, 2, ...
+
+The negative binomial regression for an observation $i$ is:
+
+$$Pr(Y = y_i|\mu_i, \theta) = \frac{\Gamma(y_i+\theta^{-1})}{\Gamma(\theta^{-1})\Gamma(y_i+1)} {\bigg(\frac {1} {1 + {\theta {\mu_i}}}\bigg) ^\theta}^{-1} { \bigg(\frac {{\theta {\mu_i}}} {1 + {\theta {\mu_i}}} \bigg) ^{y_i}}$$
+
+where $\Gamma(x)$ is the gamma function, and $\mu_i$ can be modeled as:
+
+$$ \mu_i=\left\{
+                \begin{array}{ll}
+                  exp (\beta^T X_i + \beta_0) \text{  for log link}\\
+                  \beta^T X_i + \beta_0 \text{  for identity link}\\
+                \end{array}
+              \right. $$
+
+The  negative log likelihood $L(y_i,\mu_i)$ function is:
+
+\begin{multline*}
+$$^\text{max}_{\beta,\beta_0} \bigg[ \frac{-1}{N} \sum_{i=1}^{N}  \bigg \{ \bigg( \sum_{j=0}^{y_i-1} \text{log}(j + \theta^{-1} ) \bigg) - \text{log} (\Gamma (y_i + 1)) - (y_i + \theta^{-1}) \text{log} (1 + \alpha\mu_i) \\
++ y_i \text{log}(\mu_i) + y_i \text{log} (\theta) \bigg \} \bigg]$$
+\end{multline*}
+
+The final penalized negative log likelihood is used to find the coefficients $\beta, \beta_0$ given a fixed $\theta$ value:
+
+$$ L(y_i, \mu_i) + \lambda \big(\alpha || \beta || _1 + \frac{1}{2} (1 - \alpha) || \beta || _2 \big)$$
+
+The corresponding deviance is:
+
+$$D = 2 \sum_{i=1}^{N} \bigg \{ y_i \text{log} \big(\frac{y_i}{\mu_i} \big) - (y_i + \theta^{-1}) \text{log} \frac{(1+\theta y_i)}{(1+\theta \mu_i)} \bigg \}$$
+
+\textbf{Note}: Future versions of this model will optimize the coefficients as well as the dispersion parameter. Please stay tuned.
 
 \newpage
+\waterExampleInR
+\lstinputlisting[style=R]{GLM_Vignette_code_examples/glm_negativebinomial_example.R}
+
+\waterExampleInPython
+\lstinputlisting[style=python]{GLM_Vignette_code_examples/glm_negativebinomial_example.py}
+
+%----------------------------------------------------------------------
+%----------------------------------------------------------------------
+
 \section{Building GLM Models in H2O}
 
 H2O's GLM implementation presents a high-performance distributed algorithm that scales linearly with the number
@@ -813,7 +863,7 @@ it is therefore less numerically stable and can be very slow as well due to slow
 
 \subsubsection{Offsets}
 
-\texttt{offset\_column} is an optional column name or index referring to a column in the training frame. This column specifies a prior known component to be included in the linear predictor during training. Offsets are per-row ``��bias values''�� that are used during model training. 
+\texttt{offset\_column} is an optional column name or index referring to a column in the training frame. This column specifies a prior known component to be included in the linear predictor during training. Offsets are per-row "bias values" that are used during model training. 
 
 For Gaussian distributions, they can be seen as simple corrections to the response (\texttt{y}) column. Instead of learning to predict the response (\texttt{y}-row), the model learns to predict the (row) offset of the response column. 
 
@@ -993,7 +1043,7 @@ Various model statistics are available:
 
 \texttt{R\textasciicircum2} is the R squared: $R^2 = 1 - {MSE \over \sigma_y^2}$
 
-\texttt{LogLoss} is the log loss.  $LogLoss = {−1 \over N} \sum_i^N \sum_j^C y_{i}log(p_{i,j})$
+\texttt{LogLoss} is the log loss. $LogLoss = {-1 \over N} \sum_i^N \sum_j^C y_{i}log(p_{i,j})$
 
 \texttt{AUC} is available only for binomial models and is defined the area under ROC curve.
 
@@ -1303,19 +1353,20 @@ H2O supports binomial models only; any extra levels in the test response will ge
 \item \texttt{gradient\_epsilon}: (For L-BFGS only) Specify a threshold for convergence. If the objective value (using the L-infinity norm) is less than this threshold, the model is converged.
 \item \texttt{solver}: A character string specifying the solver used. \texttt{IRLSM} supports more features. \texttt{L\_BFGS} scales better for datasets with many columns. \texttt{COORDINATE\_DESCENT} is \texttt{IRLSM} with the covariance updates version of cyclical coordinate descent in the innermost loop. \\ \texttt{COORDINATE\_DESCENT\_NAIVE} is \texttt{IRLSM} with the naive updates version of cyclical coordinate descent in the innermost loop. \\ \texttt{GRADIENT\_DESCENT\_LH} and \\\texttt{GRADIENT\_DESCENT\_SQERR} can only be used with the Ordinal family.
 \item \texttt{standardize}: A logical value that indicates whether the numeric predictors should be standardized to have a mean of 0 and a variance of 1 prior to model training. 
-\item \texttt{family}: A description of the error distribution and corresponding link function to be used in the model. The following options are supported: \texttt{gaussian}, \texttt{binomial}, \texttt{gamma}, \texttt{ordinal}, \texttt{multinomial}, \texttt{poisson}, \texttt{tweedie,} or \texttt{quasibinomial}. When a model is specified as Tweedie, users must also specify the appropriate Tweedie power. No default. %%need to specify `tweedie_variance_power` and `tweedie_link_power`??
+\item \texttt{family}: A description of the error distribution and corresponding link function to be used in the model. The following options are supported: \texttt{gaussian} (default), \texttt{binomial}, \texttt{gamma}, \texttt{ordinal}, \texttt{multinomial}, \texttt{poisson}, \texttt{tweedie,} \texttt{quasibinomial}, or \texttt{negativebinomial}. When a model is specified as Tweedie, users must also specify the appropriate Tweedie power. %%need to specify `tweedie_variance_power` and `tweedie_link_power`??
 \item \texttt{link}: The link function relates the linear predictor to the distribution function. The default is the canonical link for the specified family. The full list of supported links for each family: 
 	\begin{itemize}
 \item	{\textbf {logit}}: binomial, quasibinomial
-\item {\textbf{identity}}: gaussian, poisson, gamma 
-\item {\textbf{log}}: gaussian
+\item {\textbf{identity}}: gaussian, poisson, gamma, negativebinomial
+\item {\textbf{log}}: gaussian, negativebinomial
 \item {\textbf{inverse}}: gaussian, gamma
 \item {\textbf{tweedie}}: tweedie
 \item {\textbf{multinomial}} (family\_default): multinomial 
-\item {\textbf{ordinal}}: ologit, oprobit, and ologlog
+\item {\textbf{ordinal}}: ologit
 	\end{itemize}
 \item \texttt{tweedie\_variance\_power}: A numeric specifying the power for the variance function when \texttt{family = "tweedie"}.  Default is 0.
 \item \texttt{tweedie\_link\_power}: A numeric specifying the power for the link function when \texttt{family = "tweedie"}.  Default is 1.
+\item \texttt{theta}: Theta value (equal to 1/r) for use with the negative binomial family. This value must be \textgreater 0 and defaults to 1e-10.
 \item \texttt{alpha}: The elastic-net mixing parameter, which must be in $[0,1]$. The penalty is defined to be $P(\alpha,\beta) = (1-\alpha)/2||\beta||_2^2 + \alpha||\beta||_1 = \sum_j [(1-\alpha)/2 \beta_j^2 + \alpha|\beta_j|] $ so \texttt{alpha=1} is the Lasso penalty, while \texttt{alpha=0} is the ridge penalty. Default is 0.5.
 \item \texttt{prior}: (Optional) A numeric specifying the prior probability of class 1 in the response when \texttt{family = "binomial"}. The default value is the observation frequency of class 1. Must be from (0,1) exclusive range or NULL (no prior).
 \item \texttt{lambda}: A non-negative value representing the shrinkage parameter, which multiplies $P(\alpha,\beta)$ in the objective. The larger lambda is, the more the coefficients are shrunk toward zero (and each other). When the value is 0, regularization is disabled and ordinary generalized linear models are fit. The default is 1e-05.

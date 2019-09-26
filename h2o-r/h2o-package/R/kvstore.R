@@ -30,11 +30,11 @@
 #'
 #' @return Returns a list of hex keys in the current H2O instance.
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' library(h2o)
 #' h2o.init()
-#' prosPath <- system.file("extdata", "prostate.csv", package="h2o")
-#' prostate.hex <- h2o.uploadFile(path = prosPath)
+#' prostate_path <- system.file("extdata", "prostate.csv", package = "h2o")
+#' prostate <- h2o.uploadFile(path = prostate_path)
 #' h2o.ls()
 #' }
 #' @export
@@ -47,24 +47,42 @@ h2o.ls <- function() {
 #' Remove All Objects on the H2O Cluster
 #'
 #' Removes the data from the h2o cluster, but does not remove the local references.
+#' Retains frames and vectors specified in retained_elements argument.
+#' Retained keys must be keys of models and frames only. For models retained, training and validation frames are retained as well.
+#' Cross validation models of a retained model are NOT retained automatically, those must be specified explicitely.
 #'
 #' @param timeout_secs Timeout in seconds. Default is no timeout.
+#' @param retained_elements Frames and vectors to be retained. Other keys provided are ignored.
 #' @seealso \code{\link{h2o.rm}}
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' library(h2o)
 #' h2o.init()
-#' prosPath <- system.file("extdata", "prostate.csv", package = "h2o")
-#' prostate.hex <- h2o.uploadFile(path = prosPath)
+#' prostate_path <- system.file("extdata", "prostate.csv", package = "h2o")
+#' prostate <- h2o.uploadFile(path = prostate_path)
 #' h2o.ls()
 #' h2o.removeAll()
 #' h2o.ls()
 #' }
 #' @export
-h2o.removeAll <- function(timeout_secs=0) {
+h2o.removeAll <- function(timeout_secs=0, retained_elements = c()) {
   gc()
   tryCatch(
-    invisible(.h2o.__remoteSend(.h2o.__DKV, method = "DELETE", timeout=timeout_secs)),
+    {
+    retained_keys <- list()
+    
+    for (element in retained_elements) {
+      if (is(element, "H2OModel")) {
+        retained_keys <- append(retained_keys, element@model_id)
+      } else if (is.H2OFrame(element)) {
+        retained_keys <- append(retained_keys, h2o.getId(element))
+      }
+    }
+    
+    parms <- list()
+    parms$retained_keys <- paste0("[", paste(retained_keys, collapse=','), "]")
+    
+    invisible(.h2o.__remoteSend(.h2o.__DKV, method = "DELETE", timeout=timeout_secs, .params = parms))},
     error = function(e) {
       print("Timeout on DELETE /DKV from R")
       print("Attempt thread dump...")
@@ -79,23 +97,24 @@ h2o.removeAll <- function(timeout_secs=0) {
 #' Remove the h2o Big Data object(s) having the key name(s) from ids.
 #'
 #' @param ids The object or hex key associated with the object to be removed or a vector/list of those things.
+#' @param cascade Boolean, if set to TRUE (default), the object dependencies (e.g. submodels) are also removed.
 #' @seealso \code{\link{h2o.assign}}, \code{\link{h2o.ls}}
 #' @export
-h2o.rm <- function(ids) {
+h2o.rm <- function(ids, cascade=TRUE) {
   gc()
   if( !is.vector(ids) ) x_list = c(ids) else x_list = ids
   for (xi in x_list) {
     if( is.null(xi) ) stop("h2o.rm with NULL object is not supported")
     if( is.H2OFrame(xi) ) {
-      xi_id <- attr(xi, "id")       # String or None
-      if( is.null(xi_id) ) return() # Lazy frame, never evaluated, nothing in cluster
-      .h2o.__remoteSend(.h2o.__RAPIDS, h2oRestApiVersion = 99, ast=paste0("(rm ",xi_id[[1]],")"), session_id=h2o.getConnection()@mutable$session_id, method = "POST")
-    } else if( is(xi, "H2OModel") ) {
-      .h2o.__remoteSend(paste0(.h2o.__DKV, "/",xi@model_id), method = "DELETE")
+      key <- h2o.keyof(xi) # String or None
+      if( is.null(key) ) return() # Lazy frame, never evaluated, nothing in cluster
+      .h2o.__remoteSend(.h2o.__RAPIDS, h2oRestApiVersion = 99, ast=paste0("(rm ",key,")"), session_id=h2o.getConnection()@mutable$session_id, method = "POST")
+    } else if( is(xi, "Keyed") ) {
+      .h2o.__remoteSend(paste0(.h2o.__DKV, "/",h2o.keyof(xi)), method = "DELETE", .params=list(cascade=cascade))
     } else if( is.character(xi) ) {
-      .h2o.__remoteSend(paste0(.h2o.__DKV, "/",xi), method = "DELETE")
+      .h2o.__remoteSend(paste0(.h2o.__DKV, "/",xi), method = "DELETE", .params=list(cascade=cascade))
     } else {
-      stop("input to h2o.rm must be one of: H2OFrame, H2OModel, or character")
+      stop("input to h2o.rm must be a Keyed instance (e.g. H2OFrame, H2OModel) or character")
     }
   }
 
@@ -124,13 +143,13 @@ h2o.getFrame <- function(id) {
 #' @param model_id A string indicating the unique model_id of the model to retrieve.
 #' @return Returns an object that is a subclass of \linkS4class{H2OModel}.
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' library(h2o)
 #' h2o.init()
 #'
-#' iris.hex <- as.h2o(iris, "iris.hex")
-#' model_id <- h2o.gbm(x = 1:4, y = 5, training_frame = iris.hex)@@model_id
-#' model.retrieved <- h2o.getModel(model_id)
+#' iris_hf <- as.h2o(iris)
+#' model_id <- h2o.gbm(x = 1:4, y = 5, training_frame = iris_hf)@@model_id
+#' model_retrieved <- h2o.getModel(model_id)
 #' }
 #' @export
 h2o.getModel <- function(model_id) {
@@ -138,7 +157,7 @@ h2o.getModel <- function(model_id) {
   model_category <- json$output$model_category
   if (is.null(model_category))
     model_category <- "Unknown"
-  else if (!(model_category %in% c("Unknown", "Binomial", "Multinomial", "Ordinal", "Regression", "Clustering", "AutoEncoder", "DimReduction", "WordEmbedding", "CoxPH", "AnomalyDetection")))
+  else if (!(model_category %in% c("Unknown", "Binomial", "Multinomial", "Ordinal", "Regression", "Clustering", "AutoEncoder", "DimReduction", "WordEmbedding", "CoxPH", "AnomalyDetection", "TargetEncoder")))
     stop(paste0("model_category, \"", model_category,"\", missing in the output"))
   Class <- paste0("H2O", model_category, "Model")
   model <- json$output[!(names(json$output) %in% c("__meta", "model_category"))]
@@ -227,11 +246,11 @@ h2o.getModel <- function(model_id) {
 #' @return If path is NULL, then pretty print the POJO to the console.
 #'         Otherwise save it to the specified directory and return POJO file name.
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' library(h2o)
 #' h <- h2o.init()
 #' fr <- as.h2o(iris)
-#' my_model <- h2o.gbm(x=1:4, y=5, training_frame=fr)
+#' my_model <- h2o.gbm(x = 1:4, y = 5, training_frame = fr)
 #'
 #' h2o.download_pojo(my_model)  # print the model to screen
 #' # h2o.download_pojo(my_model, getwd())  # save the POJO and jar file to the current working
@@ -312,11 +331,11 @@ h2o.download_pojo <- function(model, path=NULL, getjar=NULL, get_jar=TRUE, jar_n
 #' @return Name of the MOJO file written to the path.
 #'
 #' @examples
-#' \donttest{
+#' \dontrun{
 #' library(h2o)
 #' h <- h2o.init()
 #' fr <- as.h2o(iris)
-#' my_model <- h2o.gbm(x=1:4, y=5, training_frame=fr)
+#' my_model <- h2o.gbm(x = 1:4, y = 5, training_frame = fr)
 #' h2o.download_mojo(my_model)  # save to the current working directory
 #' }
 #' @export

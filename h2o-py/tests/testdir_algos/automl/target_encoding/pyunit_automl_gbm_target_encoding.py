@@ -1,9 +1,10 @@
+import sys, os
+sys.path.insert(1, os.path.join("..","..","..",".."))
 import h2o
 from h2o.estimators.gbm import H2OGradientBoostingEstimator
 from tests import pyunit_utils
 from h2o.targetencoder import TargetEncoder
 import random
-
 
 def split_data(frame = None, seed = None):
   splits = frame.split_frame(ratios=[.8,.1], seed=seed)
@@ -28,7 +29,6 @@ def titanic_without_te(frame = None, seeds = None):
                                                stopping_metric="AUC",
                                                stopping_tolerance=0.001,
                                                distribution="multinomial",
-                                               # why AUC is different for quasibinomial and multinomial?
                                                seed=1234)
       air_model.train(x=myX, y=targetColumnName,
                       training_frame=ds['train'], validation_frame=ds['valid'])
@@ -39,7 +39,6 @@ def titanic_without_te(frame = None, seeds = None):
       sum_of_aucs += auc
       print("AUC without te: " + str(current_seed) + " = " + str(auc))
     return sum_of_aucs / len(seeds)
-
 
 def titanic_with_te_kfoldstrategy(frame = None, seeds = None):
     sum_of_aucs = 0
@@ -53,12 +52,12 @@ def titanic_with_te_kfoldstrategy(frame = None, seeds = None):
 
       teColumns = ["home.dest", "cabin", "embarked"]
       targetEncoder = TargetEncoder(x= teColumns, y= targetColumnName,
-                                    fold_column= foldColumnName, blending_avg= True, inflection_point = 3, smoothing = 1)
+                                    fold_column= foldColumnName, blended_avg= True, inflection_point = 3, smoothing = 1)
       targetEncoder.fit(frame=ds['train'])
 
-      encodedTrain = targetEncoder.transform(frame=ds['train'], holdout_type="kfold", seed=1234, is_train_or_valid=True)
-      encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=True)
-      encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=False)
+      encodedTrain = targetEncoder.transform(frame=ds['train'], holdout_type="kfold", seed=1234)
+      encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0)
+      encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0)
 
       myX = ["pclass", "sex", "age", "sibsp", "parch", "fare", "cabin_te", "embarked_te", "home.dest_te"]
       air_model = H2OGradientBoostingEstimator(ntrees=1000,
@@ -68,7 +67,6 @@ def titanic_with_te_kfoldstrategy(frame = None, seeds = None):
                                                stopping_metric="AUC",
                                                stopping_tolerance=0.001,
                                                distribution="multinomial",
-                                               # why AUC is different for quasibinomial and multinomial?
                                                seed=1234)
       air_model.train(x=myX, y=targetColumnName,
                       training_frame=encodedTrain, validation_frame=encodedValid)
@@ -93,12 +91,12 @@ def titanic_with_te_loostrategy(frame = None, seeds = None):
 
     teColumns = ["home.dest", "cabin", "embarked"]
     targetEncoder = TargetEncoder(x= teColumns, y= targetColumnName,
-                                  fold_column= foldColumnName, blending_avg= True, inflection_point = 3, smoothing = 1)
+                                  fold_column= foldColumnName, blended_avg= True, inflection_point = 3, smoothing = 1)
     targetEncoder.fit(frame=ds['train'])
 
-    encodedTrain = targetEncoder.transform(frame=ds['train'], holdout_type="loo", seed=1234, is_train_or_valid=True)
-    encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=True)
-    encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=False)
+    encodedTrain = targetEncoder.transform(frame=ds['train'], holdout_type="loo", seed=1234)
+    encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0)
+    encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0)
 
     myX = ["pclass", "sex", "age", "sibsp", "parch", "fare", "cabin_te", "embarked_te", "home.dest_te"]
     air_model = H2OGradientBoostingEstimator(ntrees=1000,
@@ -108,7 +106,6 @@ def titanic_with_te_loostrategy(frame = None, seeds = None):
                                              stopping_metric="AUC",
                                              stopping_tolerance=0.001,
                                              distribution="multinomial",
-                                             # why AUC is different for quasibinomial and multinomial?
                                              seed=1234)
     air_model.train(x=myX, y=targetColumnName,
                     training_frame=encodedTrain, validation_frame=encodedValid)
@@ -133,12 +130,12 @@ def titanic_with_te_nonestrategy(frame = None, seeds = None):
 
     teColumns = ["home.dest", "cabin", "embarked"]
     targetEncoder = TargetEncoder(x= teColumns, y= targetColumnName,
-                                  blending_avg= True, inflection_point = 3, smoothing = 1)
+                                  blended_avg= True, inflection_point = 3, smoothing = 1)
     targetEncoder.fit(frame=holdout)
 
-    encodedTrain = targetEncoder.transform(frame=train, holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=True)
-    encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=True)
-    encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0, seed=1234, is_train_or_valid=False)
+    encodedTrain = targetEncoder.transform(frame=train, holdout_type="none", noise=0.0)
+    encodedValid = targetEncoder.transform(frame=ds['valid'], holdout_type="none", noise=0.0)
+    encodedTest = targetEncoder.transform(frame=ds['test'], holdout_type="none", noise=0.0)
 
     myX = ["pclass", "sex", "age", "sibsp", "parch", "fare", "cabin_te", "embarked_te", "home.dest_te"]
     air_model = H2OGradientBoostingEstimator(ntrees=1000,
@@ -148,7 +145,6 @@ def titanic_with_te_nonestrategy(frame = None, seeds = None):
                                              stopping_metric="AUC",
                                              stopping_tolerance=0.001,
                                              distribution="multinomial",
-                                             # why AUC is different for quasibinomial and multinomial?
                                              seed=1234)
     air_model.train(x=myX, y=targetColumnName,
                     training_frame=encodedTrain, validation_frame=encodedValid)

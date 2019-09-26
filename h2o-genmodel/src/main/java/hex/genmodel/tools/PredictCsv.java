@@ -4,8 +4,9 @@ import au.com.bytecode.opencsv.CSVReader;
 import hex.ModelCategory;
 import hex.genmodel.GenModel;
 import hex.genmodel.MojoModel;
-import hex.genmodel.algos.tree.SharedTreeMojoModel;
 import hex.genmodel.algos.glrm.GlrmMojoModel;
+import hex.genmodel.algos.pca.PCAMojoModel;
+import hex.genmodel.algos.tree.SharedTreeMojoModel;
 import hex.genmodel.easy.EasyPredictModelWrapper;
 import hex.genmodel.easy.RowData;
 import hex.genmodel.easy.prediction.*;
@@ -14,6 +15,7 @@ import java.io.BufferedWriter;
 import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.util.*;
 
 /**
  * Simple driver program for reading a CSV file and making predictions.  Added support for separators that are
@@ -32,6 +34,7 @@ public class PredictCsv {
   public boolean setInvNumNA = false;    // enable .setConvertInvalidNumbersToNa(true)
   public boolean getTreePath = false; // enable tree models to obtain the leaf-assignment information
   boolean returnGLRMReconstruct = false; // for GLRM, return x factor by default unless set this to true
+  public int glrmIterNumber = -1;  // for GLRM, default to 100.
   // Model instance
   private EasyPredictModelWrapper model;
 
@@ -176,8 +179,13 @@ public class PredictCsv {
           datawidth = ((GlrmMojoModel) model.m)._permutation.length;
           head = "reconstr_";
         } else {
-          datawidth = ((GlrmMojoModel) model.m)._ncolX;
-          head = "Arch";
+          if (model.m instanceof GlrmMojoModel) {
+            datawidth = ((GlrmMojoModel) model.m)._ncolX;
+            head = "Arch";
+          } else {  // PCA here
+            datawidth = ((PCAMojoModel) model.m)._k;
+            head = "PC";
+          }
         }
 
         int lastData = datawidth-1;
@@ -206,8 +214,10 @@ public class PredictCsv {
       String[] inputColumnNames = null;
       String[] splitLine;
       //Reader in the column names here.
-      if ((splitLine=reader.readNext()) != null)
-        inputColumnNames=splitLine;
+      if ((splitLine = reader.readNext()) != null) {
+        inputColumnNames = splitLine;
+        checkMissingColumns(inputColumnNames);
+      }
       else  // file empty, throw an error
         throw new Exception("Input dataset file is empty!");
 
@@ -354,6 +364,7 @@ public class PredictCsv {
 
     if (returnGLRMReconstruct)
       config.setEnableGLRMReconstrut(true);
+    
     model = new EasyPredictModelWrapper(config);
   }
 
@@ -366,7 +377,10 @@ public class PredictCsv {
 
     if (returnGLRMReconstruct)
       config.setEnableGLRMReconstrut(true);
-
+    
+    if (glrmIterNumber > 0)   // set GLRM Mojo iteration number
+      config.setGLRMIterNumber(glrmIterNumber);
+    
     model = new EasyPredictModelWrapper(config);
   }
 
@@ -386,8 +400,54 @@ public class PredictCsv {
     System.out.println("     --leafNodeAssignment will show the leaf node assignment for GBM and DRF instead of the" +
             " prediction results");
     System.out.println("     --glrmReconstruct will return the reconstructed dataset for GLRM mojo instead of X factor derived from the dataset.");
+    System.out.println("     --glrmIterNumber integer indicating number of iterations to go through when constructing X factor derived from the dataset.");
     System.out.println("");
     System.exit(1);
+  }
+
+  private void checkMissingColumns(final String[] parsedColumnNamesArr) {
+    final String[] modelColumnNames = model.m._names;
+    final Set<String> parsedColumnNames = new HashSet<>(parsedColumnNamesArr.length);
+    for (int i = 0; i < parsedColumnNamesArr.length; i++) {
+      parsedColumnNames.add(parsedColumnNamesArr[i]);
+    }
+
+    List<String> missingColumns = new ArrayList<>();
+    for (String columnName : modelColumnNames) {
+
+      if (!parsedColumnNames.contains(columnName) && !columnName.equals(model.m._responseColumn)) {
+        missingColumns.add(columnName);
+      } else {
+        parsedColumnNames.remove(columnName);
+      }
+    }
+    
+    if(missingColumns.size() > 0){
+      final StringBuilder stringBuilder = new StringBuilder("There were ");
+      stringBuilder.append(missingColumns.size());
+      stringBuilder.append(" missing columns found in the input data set: {");
+
+      for (int i = 0; i < missingColumns.size(); i++) {
+        stringBuilder.append(missingColumns.get(i));
+        if(i != missingColumns.size() - 1) stringBuilder.append(",");
+      }
+      stringBuilder.append('}');
+      System.out.println(stringBuilder);
+    }
+    
+    if(parsedColumnNames.size() > 0){
+      final StringBuilder stringBuilder = new StringBuilder("Detected ");
+      stringBuilder.append(parsedColumnNames.size());
+      stringBuilder.append(" unused columns in the input data set: {");
+
+      final Iterator<String> iterator = parsedColumnNames.iterator();
+      while (iterator.hasNext()){
+        stringBuilder.append(iterator.next());
+        if(iterator.hasNext()) stringBuilder.append(",");
+      }
+      stringBuilder.append('}');
+      System.out.println(stringBuilder);
+    }
   }
 
   private void parseArgs(String[] args) {
@@ -416,6 +476,7 @@ public class PredictCsv {
             case "--input":  inputCSVFileName = sarg; break;
             case "--output": outputCSVFileName = sarg; break;
             case "--separator": separator=sarg.charAt(sarg.length()-1);; break;
+            case "--glrmIterNumber": glrmIterNumber=Integer.valueOf(sarg); break;
             default:
               System.out.println("ERROR: Unknown command line argument: " + s);
               usage();

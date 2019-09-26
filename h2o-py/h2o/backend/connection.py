@@ -20,7 +20,9 @@ import re
 import sys
 import tempfile
 import time
+import types
 from warnings import warn
+from weakref import ref
 
 import requests
 from requests.auth import AuthBase
@@ -233,7 +235,7 @@ class H2OConnection(backwards_compatible()):
         :param url: full url of the server to connect to.
         :param ip: target server's IP address or hostname (default "localhost").
         :param port: H2O server's port (default 54321).
-        :param name: H2O cloud name.
+        :param name: H2O cluster name.
         :param https: if True then connect using https instead of http (default False).
         :param verify_ssl_certificates: if False then SSL certificate checking will be disabled (default True). This
             setting should rarely be disabled, as it makes your connection vulnerable to man-in-the-middle attacks. When
@@ -324,10 +326,18 @@ class H2OConnection(backwards_compatible()):
             # If a server is unable to respond within 1s, it should be considered a bug. However we disable this
             # setting for now, for no good reason other than to ignore all those bugs :(
             conn._timeout = None
-            # This is a good one! On the surface it registers a callback to be invoked when the script is about
-            # to finish, but it also has a side effect in that the reference to current connection will be held
-            # by the ``atexit`` service till the end -- which means it will never be garbage-collected.
-            atexit.register(lambda: conn.close())
+
+            # create a weakref to prevent the atexit callback from keeping hard ref
+            # to the connection even after manual close.
+            conn_ref = ref(conn)
+
+            def exit_close():
+                con = conn_ref()
+                if con and con.connected:
+                    print("Closing connection %s at exit" % con.session_id)
+                    con.close()
+
+            atexit.register(exit_close)
         except Exception:
             # Reset _session_id so that we know the connection was not initialized properly.
             conn._stage = 0
@@ -380,14 +390,14 @@ class H2OConnection(backwards_compatible()):
         data = self._prepare_data_payload(data)
         files = self._prepare_file_payload(filename)
         params = None
-        if method == "GET" and data:
+        if (method == "GET" or method == "DELETE") and data:
             params = data
             data = None
 
         stream = False
         if save_to is not None:
-            assert_is_type(save_to, str)
-            stream = True
+            assert_is_type(save_to, str, types.FunctionType)
+            stream = True   
 
         if self._cookies is not None and isinstance(self._cookies, list):
             self._cookies = ";".join(self._cookies)
@@ -403,6 +413,8 @@ class H2OConnection(backwards_compatible()):
             resp = requests.request(method=method, url=url, data=data, json=json, files=files, params=params,
                                     headers=headers, timeout=self._timeout, stream=stream,
                                     auth=self._auth, verify=self._verify_ssl_cert, proxies=self._proxies)
+            if isinstance(save_to, types.FunctionType):
+                save_to = save_to(resp)
             self._log_end_transaction(start_time, resp)
             return self._process_response(resp, save_to)
 
@@ -424,6 +436,12 @@ class H2OConnection(backwards_compatible()):
             raise
 
 
+    @staticmethod
+    def save_to_detect(resp):
+        disposition = resp.headers['Content-Disposition']
+        return disposition.split("filename=")[1].strip()
+
+
     def close(self):
         """
         Close an existing connection; once closed it cannot be used again.
@@ -438,11 +456,16 @@ class H2OConnection(backwards_compatible()):
                 if self._timeout is None: self._timeout = 1
                 self.request("DELETE /4/sessions/%s" % self._session_id)
                 self._print("H2O session %s closed." % self._session_id)
-            except Exception:
-                pass
+            except Exception as e:
+                self._print("H2O session %s was not closed properly." % self._session_id)
+                self._log_end_exception(e)
             self._session_id = None
         self._stage = -1
 
+
+    @property
+    def connected(self):
+        return self._stage > 0
 
     @property
     def session_id(self):
@@ -450,7 +473,7 @@ class H2OConnection(backwards_compatible()):
         Return the session id of the current connection.
 
         The session id is issued (through an API request) the first time it is requested, but no sooner. This is
-        because generating a session id puts it into the DKV on the server, which effectively locks the cloud. Once
+        because generating a session id puts it into the DKV on the server, which effectively locks the cluster. Once
         issued, the session id will stay the same until the connection is closed.
         """
         if self._session_id is None:
@@ -460,7 +483,7 @@ class H2OConnection(backwards_compatible()):
 
     @property
     def cluster(self):
-        """H2OCluster object describing the underlying cloud."""
+        """H2OCluster object describing the underlying cluster."""
         return self._cluster
 
     @property
@@ -550,15 +573,15 @@ class H2OConnection(backwards_compatible()):
 
     def _test_connection(self, max_retries=5, messages=None):
         """
-        Test that the H2O cluster can be reached, and retrieve basic cloud status info.
+        Test that the H2O cluster can be reached, and retrieve basic cluster status info.
 
-        :param max_retries: Number of times to try to connect to the cloud (with 0.2s intervals).
+        :param max_retries: Number of times to try to connect to the cluster (with 0.2s intervals).
 
-        :returns: Cloud information (an H2OCluster object)
+        :returns: Cluster information (an H2OCluster object)
         :raises H2OConnectionError, H2OServerError:
         """
         if messages is None:
-            messages = ("Connecting to H2O server at {url}..", "successful.", "failed.")
+            messages = ("Connecting to H2O server at {url} ..", "successful.", "failed.")
         self._print(messages[0].format(url=self._base_url), end="")
         cld = None
         errors = []

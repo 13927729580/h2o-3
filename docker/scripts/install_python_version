@@ -1,10 +1,7 @@
-#!/bin/bash
+#!/bin/bash -ex
 
 # Script for installing all R versions specified as comma separated list
 # in ${1} or in ${R_VERSIONS}.
-
-# exit on error
-set -e
 
 if [[ ! ${H2O_BRANCH} ]]; then
  echo "H2O_BRANCH must be set"
@@ -21,7 +18,7 @@ if [[ ! -n ${VERSIONS_TO_INSTALL} ]]; then
 fi
 
 # Download test-requirements.txt file from GitHub
-wget -q https://raw.githubusercontent.com/h2oai/h2o-3/${H2O_BRANCH}/h2o-py/test-requirements.txt
+wget -nv https://raw.githubusercontent.com/h2oai/h2o-3/${H2O_BRANCH}/h2o-py/test-requirements.txt
 
 IFS=',' read -r -a array <<< ${VERSIONS_TO_INSTALL}
 for python_version in "${array[@]}"; do
@@ -37,7 +34,9 @@ for python_version in "${array[@]}"; do
   su jenkins -c "virtualenv -p python${python_version} /envs/h2o_env_python${python_version}"
 
   echo "###### Installing dependencies for Python ${python_version} ######"
-  su jenkins -c ". /envs/h2o_env_python${python_version}/bin/activate && pip install -r test-requirements.txt"
+  su jenkins -c ". /envs/h2o_env_python${python_version}/bin/activate && pip uninstall setuptools -y && pip install setuptools" # resinstalling setuptools fixes install issues for sphinx-osexample
+  su jenkins -c ". /envs/h2o_env_python${python_version}/bin/activate && grep -v \"^#\" test-requirements.txt | sed -r 's/(.*)/\"\\1\"/' | xargs -n 1 -L 1 pip install"
+  su jenkins -c "mkdir -p ~/.config/matplotlib/ && echo "backend: Agg" > ~/.config/matplotlib/matplotlibrc"
 done
 
 rm test-requirements.txt

@@ -9,7 +9,6 @@ import water.util.PojoUtils;
 
 import java.util.*;
 
-import static java.lang.StrictMath.floor;
 import static java.lang.StrictMath.min;
 
 public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSpaceSearchCriteria> {
@@ -180,18 +179,19 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
        * Factory method to create an instance based on the given HyperSpaceSearchCriteria instance.
        */
       public static <MP extends Model.Parameters, C extends HyperSpaceSearchCriteria>
-        HyperSpaceWalker create(MP params,
-                                              Map<String, Object[]> hyperParams,
-                                            ModelParametersBuilderFactory<MP> paramsBuilderFactory,
-                                            C search_criteria) {
+        HyperSpaceWalker<MP, ? extends HyperSpaceSearchCriteria> create(MP params,
+                                                                        Map<String, Object[]> hyperParams,
+                                                                        ModelParametersBuilderFactory<MP> paramsBuilderFactory,
+                                                                        C search_criteria) {
         HyperSpaceSearchCriteria.Strategy strategy = search_criteria.strategy();
 
-        if (strategy == HyperSpaceSearchCriteria.Strategy.Cartesian)
+        if (strategy == HyperSpaceSearchCriteria.Strategy.Cartesian) {
           return new HyperSpaceWalker.CartesianWalker<>(params, hyperParams, paramsBuilderFactory, (HyperSpaceSearchCriteria.CartesianSearchCriteria) search_criteria);
-        else if (strategy == HyperSpaceSearchCriteria.Strategy.RandomDiscrete )
+        } else if (strategy == HyperSpaceSearchCriteria.Strategy.RandomDiscrete ) {
           return new HyperSpaceWalker.RandomDiscreteValueWalker<>(params, hyperParams, paramsBuilderFactory, (HyperSpaceSearchCriteria.RandomDiscreteValueSearchCriteria) search_criteria);
-        else
+        } else {
           throw new H2OIllegalArgumentException("strategy", "GridSearch", strategy);
+        }
       }
     }
 
@@ -466,7 +466,7 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
     public boolean stopEarly(Model model, ScoringInfo[] sk) {
       return ScoreKeeper.stopEarly(ScoringInfo.scoreKeepers(sk),
                                    search_criteria().stopping_rounds(),
-                                   model._output.isClassifier(),
+                                    ScoreKeeper.ProblemType.forSupervised(model._output.isClassifier()),
                                    search_criteria().stopping_metric(),
                                    search_criteria().stopping_tolerance(), "grid's best", true);
     }
@@ -509,17 +509,16 @@ public interface HyperSpaceWalker<MP extends Model.Parameters, C extends HyperSp
               // ToDo: This implementation only works for sequential model building.
               if (_set_model_seed_from_search_seed) {
                 // set model seed = search_criteria.seed+(0, 1, 2,..., model number)
-                params._seed=((HyperSpaceSearchCriteria.RandomDiscreteValueSearchCriteria) _search_criteria).seed()+
-                        (model_number++);
+                params._seed = _search_criteria.seed() + (model_number++);
               }
 
               // set max_runtime_secs
               double timeleft = this.time_remaining_secs();
               if (timeleft > 0)  {
                 if (params._max_runtime_secs > 0) {
-                  params._max_runtime_secs = (long) floor(min(params._max_runtime_secs, timeleft));
+                  params._max_runtime_secs = min(params._max_runtime_secs, timeleft);
                 } else {
-                  params._max_runtime_secs = (long) floor(timeleft);
+                  params._max_runtime_secs = timeleft;
                 }
               }
             }

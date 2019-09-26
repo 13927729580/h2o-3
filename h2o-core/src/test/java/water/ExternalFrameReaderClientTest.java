@@ -23,7 +23,7 @@ public class ExternalFrameReaderClientTest extends TestUtil{
     private volatile AssertionError exc;
 
     @Test
-    public void testReading() throws IOException, InterruptedException, ExternalFrameConfirmationException {
+    public void testReading() throws InterruptedException {
 
         final String frameName = "testFrame";
         final long[] chunkLayout = {2, 2, 2, 1};
@@ -60,7 +60,7 @@ public class ExternalFrameReaderClientTest extends TestUtil{
                     @Override
                     public void run() {
                         try {
-                            ByteChannel sock = ExternalFrameUtils.getConnection(nodes[currentChunkIdx % nodes.length]);
+                            ByteChannel sock = ExternalFrameUtils.getConnection(nodes[currentChunkIdx % nodes.length], H2O.SELF.getTimestamp());
                             ExternalFrameReaderClient reader = new ExternalFrameReaderClient(sock, frameName, currentChunkIdx, selectedColumnIndices, expectedTypes);
 
                             int rowsRead = 0;
@@ -84,12 +84,9 @@ public class ExternalFrameReaderClientTest extends TestUtil{
 
                             assertEquals("Num or rows read was " + rowsRead + ", expecting " + reader.getNumRows(), rowsRead, reader.getNumRows());
 
-                            reader.waitUntilAllReceived(10);
                             sock.close();
                         } catch (AssertionError e) {
                             exc = e;
-                        } catch (ExternalFrameConfirmationException e){
-                            e.printStackTrace();
                         } catch (IOException e) {
                             e.printStackTrace();
                         }

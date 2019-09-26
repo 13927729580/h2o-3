@@ -216,15 +216,14 @@ public abstract class MRTask<T extends MRTask<T>> extends DTask<T> implements Fo
    * @return null if _noutputs is 0, otherwise returns a Frame.
    */
   public Frame outputFrame(Key<Frame> key, String [] names, String [][] domains){
-    Futures fs = new Futures();
-    Frame res = closeFrame(key, names, domains, fs);
-    if( key != null ) DKV.put(res,fs);
-    fs.blockForPending();
+    Frame res = closeFrame(key, names, domains);
+    if (key != null)
+      DKV.put(res);
     return res;
   }
 
   // the work-horse for the outputFrame calls
-  private Frame closeFrame(Key key, String[] names, String[][] domains, Futures fs) {
+  private Frame closeFrame(Key key, String[] names, String[][] domains) {
     if( _output_types == null ) return null;
     final int noutputs = _output_types.length;
     Vec[] vecs = new Vec[noutputs];
@@ -232,11 +231,13 @@ public abstract class MRTask<T extends MRTask<T>> extends DTask<T> implements Fo
       for( int i = 0; i < noutputs; i++ )
         vecs[i] = _fr.anyVec().makeZero();
     else {
+      Futures fs = new Futures();
       int rowLayout = _appendables[0].compute_rowLayout();
       for( int i = 0; i < noutputs; i++ ) {
         _appendables[i].setDomain(domains==null ? null : domains[i]);
         vecs[i] = _appendables[i].close(rowLayout,fs);
       }
+      fs.blockForPending(); // Vecs need to be installed in DKV _before_ we create a Frame
     }
     return new Frame(key,names,vecs);
   }
@@ -300,7 +301,7 @@ public abstract class MRTask<T extends MRTask<T>> extends DTask<T> implements Fo
   /** Compute a permissible node index on which to launch remote work. */
   private int addShift( int x ) { x += _nlo; int sz = H2O.CLOUD.size(); return x < sz ? x : x-sz; }
   private int subShift( int x ) { x -= _nlo; int sz = H2O.CLOUD.size(); return x <  0 ? x+sz : x; }
-  private short selfidx() { int idx = H2O.SELF.index(); if( idx>= 0 ) return (short)idx; assert H2O.SELF._heartbeat._client; return 0; }
+  private short selfidx() { int idx = H2O.SELF.index(); if( idx>= 0 ) return (short)idx; assert H2O.SELF.isClient(); return 0; }
 
   // Profiling support.  Time for each subpart of a single M/R task, plus any
   // nested MRTasks.  All numbers are CTM stamps or millisecond times.

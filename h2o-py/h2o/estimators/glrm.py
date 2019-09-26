@@ -20,27 +20,25 @@ class H2OGeneralizedLowRankEstimator(H2OEstimator):
     """
 
     algo = "glrm"
+    param_names = {"model_id", "training_frame", "validation_frame", "ignored_columns", "ignore_const_cols",
+                   "score_each_iteration", "loading_name", "transform", "k", "loss", "loss_by_col", "loss_by_col_idx",
+                   "multi_loss", "period", "regularization_x", "regularization_y", "gamma_x", "gamma_y",
+                   "max_iterations", "max_updates", "init_step_size", "min_step_size", "seed", "init", "svd_method",
+                   "user_y", "user_x", "expand_user_y", "impute_original", "recover_svd", "max_runtime_secs",
+                   "export_checkpoints_dir"}
 
     def __init__(self, **kwargs):
         super(H2OGeneralizedLowRankEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "validation_frame", "ignored_columns", "ignore_const_cols",
-                      "score_each_iteration", "loading_name", "transform", "k", "loss", "loss_by_col",
-                      "loss_by_col_idx", "multi_loss", "period", "regularization_x", "regularization_y", "gamma_x",
-                      "gamma_y", "max_iterations", "max_updates", "init_step_size", "min_step_size", "seed", "init",
-                      "svd_method", "user_y", "user_x", "expand_user_y", "impute_original", "recover_svd",
-                      "max_runtime_secs", "export_checkpoints_dir"}
-        if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
                 self._id = pvalue
                 self._parms["model_id"] = pvalue
-            elif pname in names_list:
+            elif pname in self.param_names:
                 # Using setattr(...) will invoke type-checking of the arguments
                 setattr(self, pname, pvalue)
             else:
                 raise H2OValueError("Unknown parameter %s = %r" % (pname, pvalue))
-        self._parms["_rest_version"] = 3
 
     @property
     def training_frame(self):
@@ -53,8 +51,7 @@ class H2OGeneralizedLowRankEstimator(H2OEstimator):
 
     @training_frame.setter
     def training_frame(self, training_frame):
-        assert_is_type(training_frame, None, H2OFrame)
-        self._parms["training_frame"] = training_frame
+        self._parms["training_frame"] = H2OFrame._validate(training_frame, 'training_frame')
 
 
     @property
@@ -68,8 +65,7 @@ class H2OGeneralizedLowRankEstimator(H2OEstimator):
 
     @validation_frame.setter
     def validation_frame(self, validation_frame):
-        assert_is_type(validation_frame, None, H2OFrame)
-        self._parms["validation_frame"] = validation_frame
+        self._parms["validation_frame"] = H2OFrame._validate(validation_frame, 'validation_frame')
 
 
     @property
@@ -417,8 +413,7 @@ class H2OGeneralizedLowRankEstimator(H2OEstimator):
 
     @user_y.setter
     def user_y(self, user_y):
-        assert_is_type(user_y, None, H2OFrame)
-        self._parms["user_y"] = user_y
+        self._parms["user_y"] = H2OFrame._validate(user_y, 'user_y')
 
 
     @property
@@ -432,8 +427,7 @@ class H2OGeneralizedLowRankEstimator(H2OEstimator):
 
     @user_x.setter
     def user_x(self, user_x):
-        assert_is_type(user_x, None, H2OFrame)
-        self._parms["user_x"] = user_x
+        self._parms["user_x"] = H2OFrame._validate(user_x, 'user_x')
 
 
     @property

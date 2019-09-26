@@ -1,6 +1,5 @@
 package hex.schemas;
 
-import hex.deeplearning.DeepLearningModel.DeepLearningParameters;
 import hex.glm.GLM;
 import hex.glm.GLMModel.GLMParameters;
 import hex.glm.GLMModel.GLMParameters.Solver;
@@ -37,6 +36,7 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
             "family",
             "tweedie_variance_power",
             "tweedie_link_power",
+            "theta", // equals to 1/r and should be > 0 and <=1, used by negative binomial
             "solver",
             "alpha",
             "lambda",
@@ -45,6 +45,7 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
             "nlambdas",
             "standardize",
             "missing_values_handling",
+            "plug_values",
             "compute_p_values",
             "remove_collinear_columns",
             "intercept",
@@ -61,7 +62,7 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
             "interactions",
             "interaction_pairs",
             "obj_reg",
-           "export_checkpoints_dir",
+            "export_checkpoints_dir",
             // dead unused args forced here by backwards compatibility, remove in V4
             "balance_classes",
             "class_sampling_factors",
@@ -76,7 +77,7 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
     public long seed;
 
     // Input fields
-    @API(help = "Family. Use binomial for classification with logistic regression, others are for regression problems.", values = {"gaussian", "binomial","quasibinomial","ordinal", "multinomial", "poisson", "gamma", "tweedie"}, level = Level.critical)
+    @API(help = "Family. Use binomial for classification with logistic regression, others are for regression problems.", values = {"gaussian", "binomial","quasibinomial","ordinal", "multinomial", "poisson", "gamma", "tweedie", "negativebinomial"}, level = Level.critical)
     // took tweedie out since it's not reliable
     public GLMParameters.Family family;
 
@@ -85,6 +86,9 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
 
     @API(help = "Tweedie link power", level = Level.critical, gridable = true)
     public double tweedie_link_power;
+
+    @API(help = "Theta", level = Level.critical, gridable = true)
+    public double theta; // used by negtaive binomial distribution family
 
     @API(help = "AUTO will set the solver based on given data and the other parameters. IRLSM is fast on on problems with small number of predictors and for lambda-search with L1 penalty, L_BFGS scales better for datasets with many columns.", values = {"AUTO", "IRLSM", "L_BFGS","COORDINATE_DESCENT_NAIVE", "COORDINATE_DESCENT", "GRADIENT_DESCENT_LH", "GRADIENT_DESCENT_SQERR"}, level = Level.critical)
     public Solver solver;
@@ -110,9 +114,12 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
     @API(help = "Standardize numeric columns to have zero mean and unit variance", level = Level.critical)
     public boolean standardize;
 
-    @API(help = "Handling of missing values. Either MeanImputation or Skip.", values = { "MeanImputation", "Skip" }, level = API.Level.expert, direction=API.Direction.INOUT, gridable = true)
-    public DeepLearningParameters.MissingValuesHandling missing_values_handling;
+    @API(help = "Handling of missing values. Either MeanImputation, Skip or PlugValues.", values = { "MeanImputation", "Skip", "PlugValues" }, level = API.Level.expert, direction=API.Direction.INOUT, gridable = true)
+    public GLMParameters.MissingValuesHandling missing_values_handling;
 
+    @API(help = "Plug Values (a single row frame containing values that will be used to impute missing values of the training/validation frame, use with conjunction missing_values_handling = PlugValues)", direction = API.Direction.INPUT)
+    public FrameKeyV3 plug_values;
+    
     @API(help = "Restrict coefficients (not intercept) to be non-negative")
     public boolean non_negative;
 
@@ -137,8 +144,8 @@ public class GLMV3 extends ModelBuilderSchema<GLM,GLMV3,GLMV3.GLMParametersV3> {
     @API(help="Likelihood divider in objective value computation, default is 1/nobs")
     public double obj_reg;
 
-    @API(help = "", level = Level.secondary, values = {"family_default", "identity", "logit", "log", "inverse",
-            "tweedie", "ologit", "oprobit", "ologlog"})
+    @API(help = "Link function.", level = Level.secondary, values = {"family_default", "identity", "logit", "log", "inverse",
+            "tweedie", "ologit"}) //"oprobit", "ologlog": will be supported.
     public GLMParameters.Link link;
 
     @API(help="Include constant term in the model", level = Level.expert)

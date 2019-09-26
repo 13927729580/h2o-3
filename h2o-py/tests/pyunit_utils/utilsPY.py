@@ -3,10 +3,10 @@ from future import standard_library
 standard_library.install_aliases()
 from builtins import range
 from past.builtins import basestring
+from functools import reduce
 from scipy.sparse import csr_matrix
-import sys, os
+import sys, os, gc
 import pandas as pd
-from six import string_types
 
 try:        # works with python 2.7 not 3
     from StringIO import StringIO
@@ -44,10 +44,35 @@ import json
 import math
 from random import shuffle
 import scipy.special
-from h2o.utils.typechecks import assert_is_type
+from h2o.utils.typechecks import is_type
 import datetime
 import time # needed to randomly generate time
 import uuid # call uuid.uuid4() to generate unique uuid numbers
+
+
+class Namespace:
+    """
+    simplistic namespace class allowing to create bag/namespace objects that are easily extendable in a functional way
+    """
+    @staticmethod
+    def add(namespace, **kwargs):
+        namespace.__dict__.update(kwargs)
+        return namespace
+
+    def __init__(self, **kwargs):
+        Namespace.add(self, **kwargs)
+
+    def extend(self, **kwargs):
+        """
+        :param kwargs: attributes extending the current namespace
+        :return: a new namespace containing same attributes as the original + the extended ones
+        """
+        return Namespace.add(copy.copy(self), **kwargs)
+
+
+def ns(**kwargs):
+    return Namespace(**kwargs)
+
 
 def gen_random_uuid(numberUUID):
     uuidVec = numberUUID*[None]
@@ -190,7 +215,8 @@ def np_comparison_check(h2o_data, np_data, num_elements):
  # perform h2o predict and mojo predict.  Frames containing h2o prediction is returned and mojo predict are
 # returned.
 
-def mojo_predict(model, tmpdir, mojoname, glrmReconstruct=False, get_leaf_node_assignment=False):
+def mojo_predict(model, tmpdir, mojoname, glrmReconstruct=False, get_leaf_node_assignment=False, glrmIterNumber=-1, zipFilePath=None):
+    
     """
     perform h2o predict and mojo predict.  Frames containing h2o prediction is returned and mojo predict are returned.
     It is assumed that the input data set is saved as in.csv in tmpdir directory.
@@ -207,6 +233,8 @@ def mojo_predict(model, tmpdir, mojoname, glrmReconstruct=False, get_leaf_node_a
     # load mojo and have it do predict
     outFileName = os.path.join(tmpdir, 'out_mojo.csv')
     mojoZip = os.path.join(tmpdir, mojoname) + ".zip"
+    if not(zipFilePath==None):
+        mojoZip = zipFilePath
     genJarDir = str.split(str(tmpdir),'/')
     genJarDir = '/'.join(genJarDir[0:genJarDir.index('h2o-py')])    # locate directory of genmodel.jar
 
@@ -220,6 +248,10 @@ def mojo_predict(model, tmpdir, mojoname, glrmReconstruct=False, get_leaf_node_a
 
     if glrmReconstruct:  # used for GLRM to grab the x coefficients (factors) instead of the predicted values
         java_cmd.append("--glrmReconstruct")
+    
+    if glrmIterNumber > 0:
+        java_cmd.append("--glrmIterNumber")
+        java_cmd.append(str(glrmIterNumber))
 
     p = subprocess.Popen(java_cmd, stdout=PIPE, stderr=STDOUT)
     o, e = p.communicate()
@@ -485,17 +517,41 @@ def pyunit_exec(test_name):
     exec(pyunit_c, {})
 
 def standalone_test(test):
-    if not h2o.h2o.connection():
+    if not h2o.connection() or not h2o.connection().connected:
+        print("Creating connection for test %s" % test.__name__)
         h2o.init(strict_version_check=False)
+        print("New session: %s" % h2o.connection().session_id)
 
     h2o.remove_all()
 
     h2o.log_and_echo("------------------------------------------------------------")
     h2o.log_and_echo("")
-    h2o.log_and_echo("STARTING TEST")
+    h2o.log_and_echo("STARTING TEST "+test.__name__)
     h2o.log_and_echo("")
     h2o.log_and_echo("------------------------------------------------------------")
     test()
+
+def run_tests(tests, run_in_isolation=True):
+    #flatten in case of nested tests/test suites
+    all_tests = reduce(lambda l, r: (l.extend(r) if isinstance(r, (list, tuple)) else l.append(r)) or l, tests, [])
+    for test in all_tests:
+        header = "Running {}{}".format(test.__name__, "" if not hasattr(test, 'tag') else " [{}]".format(test.tag))
+        print("\n"+('='*len(header))+"\n"+header)
+        if run_in_isolation:
+            standalone_test(test)
+        else:
+            test()
+            
+def tag_test(test, tag):
+    if tag is not None:
+        test.tag = tag
+    return test
+
+def assert_warn(predicate, message):
+    try:
+        assert predicate, message
+    except AssertionError as e:
+        print("WARN: {}".format(str(e)))
 
 def make_random_grid_space(algo, ncols=None, nrows=None):
     """
@@ -3173,7 +3229,7 @@ def model_run_time_sorted_by_time(model_list):
     return model_runtime_sec_list
 
 
-def model_seed_sorted_by_time(model_list):
+def model_seed_sorted(model_list):
     """
     This function is written to find the seed used by each model in the order of when the model was built.  The
     oldest model metric will be the first element.
@@ -3187,13 +3243,11 @@ def model_seed_sorted_by_time(model_list):
 
 
     for index in range(model_num):
-        model_index = int(model_list[index]._id.split('_')[-1]) - 1  # model names start at 1
-
         for pIndex in range(len(model_list.models[0]._model_json["parameters"])):
             if model_list.models[index]._model_json["parameters"][pIndex]["name"]=="seed":
-                model_seed_list[model_index]=model_list.models[index]._model_json["parameters"][pIndex]["actual_value"]
+                model_seed_list[index]=model_list.models[index]._model_json["parameters"][pIndex]["actual_value"]
                 break
-
+    model_seed_list.sort()
     return model_seed_list
 
 
@@ -3437,7 +3491,8 @@ def compare_frames_local(f1, f2, prob=0.5, tol=1e-6, returnResult=False):
     :param returnResult:
     :return:
     '''
-    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "The two frames are of different sizes."
+    assert (f1.nrow==f2.nrow) and (f1.ncol==f2.ncol), "Frame 1 row {0}, col {1}.  Frame 2 row {2}, col {3}.  " \
+                                                      "They are different.".format(f1.nrow, f1.ncol, f2.nrow, f2.ncol)
     typeDict = f1.types
     frameNames = f1.names
 
@@ -3561,7 +3616,7 @@ def compare_frames_local_onecolumn_NA_enum(f1, f2, prob=0.5, tol=1e-6, returnRes
                             return False
                     else:
                         assert temp1[rowInd][colInd]==temp2[rowInd][colInd], "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
-                                      "{1}".format(temp1[rowInd][colInd], temp1[rowInd][colInd], rowInd, colInd)
+                                      "{1}".format(temp1[rowInd][colInd], temp2[rowInd][colInd], rowInd, colInd)
 
     if returnResult:
         return True
@@ -3588,7 +3643,7 @@ def compare_frames_local_onecolumn_NA_string(f1, f2, prob=0.5, returnResult=Fals
                             return False
                     else:
                         assert temp1[rowInd][colInd]==temp2[rowInd][colInd], "Failed frame values check at row {2} and column {3}! frame1 value: {0}, frame2 value: " \
-                                                                         "{1}".format(temp1[rowInd][colInd], temp1[rowInd][colInd], rowInd, colInd)
+                                                                         "{1}".format(temp1[rowInd][colInd], temp2[rowInd][colInd], rowInd, colInd)
 
     if returnResult:
         return True
@@ -3637,7 +3692,7 @@ def build_save_model_DRF(params, x, train, respName):
 
 
 # generate random dataset, copied from Pasha
-def random_dataset(response_type, verbose=True, NTESTROWS=200, missing_fraction=0.0, seed=None):
+def random_dataset(response_type, verbose=True, ncol_upper=25000, ncol_lower=15000, NTESTROWS=200, missing_fraction=0.0, seed=None):
     """Create and return a random dataset."""
     if verbose: print("\nCreating a dataset for a %s problem:" % response_type)
     fractions = {k + "_fraction": random.random() for k in "real categorical integer time string binary".split()}
@@ -3652,7 +3707,7 @@ def random_dataset(response_type, verbose=True, NTESTROWS=200, missing_fraction=
         response_factors = 2
     else:
         response_factors = random.randint(3, 10)
-    df = h2o.create_frame(rows=random.randint(15000, 25000) + NTESTROWS, cols=random.randint(3, 20),
+    df = h2o.create_frame(rows=random.randint(ncol_lower, ncol_upper) + NTESTROWS, cols=random.randint(3, 20),
                           missing_fraction=missing_fraction,
                           has_response=True, response_factors=response_factors, positive_response=True, factors=10,
                           seed=seed, **fractions)
@@ -3725,6 +3780,21 @@ def random_dataset_numeric_only(nrow, ncol, integerR=100, misFrac=0.01, randSeed
     fractions["binary_fraction"] = 0
 
     df = h2o.create_frame(rows=nrow, cols=ncol, missing_fraction=misFrac, has_response=False, integer_range=integerR,
+                          seed=randSeed, **fractions)
+    return df
+
+# generate random dataset of ncolumns of integer and reals, copied from Pasha
+def random_dataset_real_only(nrow, ncol, realR=100, misFrac=0.01, randSeed=None):
+    """Create and return a random dataset."""
+    fractions = dict()
+    fractions["real_fraction"] = 1  # Right now we are dropping string columns, so no point in having them.
+    fractions["categorical_fraction"] = 0
+    fractions["integer_fraction"] = 0
+    fractions["time_fraction"] = 0
+    fractions["string_fraction"] = 0  # Right now we are dropping string columns, so no point in having them.
+    fractions["binary_fraction"] = 0
+
+    df = h2o.create_frame(rows=nrow, cols=ncol, missing_fraction=misFrac, has_response=False, integer_range=realR,
                           seed=randSeed, **fractions)
     return df
 
@@ -3913,6 +3983,25 @@ def genTrainFrame(nrow, ncol, enumCols=0, enumFactors=2, responseLevel=2, miscfr
         trainFrame = trainFrameNumerics.cbind(yresponse)
     return trainFrame
 
+def check_xgb_var_imp(h2o_train, h2o_model, xgb_train, xgb_model, tolerance=1e-6):
+    column_map = dict(zip(h2o_train.names, xgb_train.feature_names))
+
+    h2o_var_imps = h2o_model.varimp()
+    h2o_var_frequencies = h2o_model._model_json["output"]["variable_importances_frequency"].cell_values
+    freq_map = dict(map(lambda t: (t[0], t[1]), h2o_var_frequencies))
+    
+
+    # XGBoost reports average gain of a split
+    xgb_var_imps = xgb_model.get_score(importance_type="gain")
+
+    for h2o_var_imp in h2o_var_imps:
+        frequency = freq_map[h2o_var_imp[0]]
+        xgb_var_imp = xgb_var_imps[column_map[h2o_var_imp[0]]]
+        abs_diff = abs(h2o_var_imp[1]/frequency - xgb_var_imp)
+        norm = max(1, abs(h2o_var_imp[1]/frequency), abs(xgb_var_imp))
+        assert abs_diff/norm < tolerance, "Variable importance of feature {0} is different. H2O: {1}, XGB {2}"\
+            .format(h2o_var_imp[0], h2o_var_imp[1], xgb_var_imp)
+
 def summarizeResult_regression(h2oPredictD, nativePred, h2oTrainTimeD, nativeTrainTime, h2oPredictTimeD, nativeScoreTime, tolerance=1e-6):
     # Result comparison in terms of time
     print("H2OXGBoost train time is {0}ms.  Native XGBoost train time is {1}s.\n  H2OGBoost scoring time is {2}s."
@@ -3982,7 +4071,7 @@ def manual_partial_dependence(model, dataframe, xlist, xname, weightV):
         cons = [xval]*nRows
         if xname in dataframe.names:
             dataframe=dataframe.drop(xname)
-        if not((isinstance(xval, string_types) and xval=='NA') or (isinstance(xval, float) and math.isnan(xval))):
+        if not((is_type(xval, str) and xval=='NA') or (isinstance(xval, float) and math.isnan(xval))):
             dataframe = dataframe.cbind(h2o.H2OFrame(cons))
             dataframe.set_name(nCols, xname)
 
@@ -4164,3 +4253,40 @@ def checkCorrectSkipsFolder(originalFullFrame, csvfile, skipped_columns):
                 compare_frames_local_onecolumn_NA(originalFullFrame[cindex], skippedFrameIF[skipCounter],
                                                                prob=1, tol=1e-10, returnResult=False)
             skipCounter = skipCounter + 1
+
+def assertModelColNamesTypesCorrect(modelNames, modelTypes, frameNames, frameTypesDict):
+    fName = list(frameNames)
+    mName = list(modelNames)
+    assert fName.sort() == mName.sort(), "Expected column names {0}, actual column names {1} and they" \
+                                                    " are different".format(frameNames, modelNames) 
+    for ind in range(len(frameNames)):  
+        if modelTypes[modelNames.index(frameNames[ind])].lower()=="numeric":
+            assert (frameTypesDict[frameNames[ind]].lower()=='real') or \
+                   (frameTypesDict[frameNames[ind]].lower()=='int'), \
+                "Expected training data types for column {0} is {1}.  Actual training data types for column {2} from " \
+                "model output is {3}".format(frameNames[ind], frameTypesDict[frameNames[ind]],
+                                             frameNames[ind], modelTypes[modelNames.index(frameNames[ind])])
+        else:
+            assert modelTypes[modelNames.index(frameNames[ind])].lower()==frameTypesDict[frameNames[ind]].lower(), \
+            "Expected training data types for column {0} is {1}.  Actual training data types for column {2} from " \
+            "model output is {3}".format(frameNames[ind], frameTypesDict[frameNames[ind]],
+                                         frameNames[ind], modelTypes[modelNames.index(frameNames[ind])])
+
+
+def saveModelMojo(model):
+    '''
+    Given a H2O model, this function will save it in a directory off the results directory.  In addition, it will
+    return the absolute path of where the mojo file is.
+    
+    :param model: 
+    :return: 
+    '''
+    # save model
+    regex = re.compile("[+\\-* !@#$%^&()={}\\[\\]|;:'\"<>,.?/]")
+    MOJONAME = regex.sub("_", model._id)
+
+    print("Downloading Java prediction model code from H2O")
+    tmpdir = os.path.normpath(os.path.join(os.path.dirname(os.path.realpath('__file__')), "..", "results", MOJONAME))
+    os.makedirs(tmpdir)
+    model.download_mojo(path=tmpdir)    # save mojo
+    return tmpdir

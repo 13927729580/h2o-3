@@ -20,21 +20,20 @@ class H2OKMeansEstimator(H2OEstimator):
     """
 
     algo = "kmeans"
+    param_names = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_models",
+                   "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "fold_assignment",
+                   "fold_column", "ignored_columns", "ignore_const_cols", "score_each_iteration", "k", "estimate_k",
+                   "user_points", "max_iterations", "standardize", "seed", "init", "max_runtime_secs",
+                   "categorical_encoding", "export_checkpoints_dir"}
 
     def __init__(self, **kwargs):
         super(H2OKMeansEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "validation_frame", "nfolds", "keep_cross_validation_models",
-                      "keep_cross_validation_predictions", "keep_cross_validation_fold_assignment", "fold_assignment",
-                      "fold_column", "ignored_columns", "ignore_const_cols", "score_each_iteration", "k", "estimate_k",
-                      "user_points", "max_iterations", "standardize", "seed", "init", "max_runtime_secs",
-                      "categorical_encoding", "export_checkpoints_dir"}
-        if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
                 self._id = pvalue
                 self._parms["model_id"] = pvalue
-            elif pname in names_list:
+            elif pname in self.param_names:
                 # Using setattr(...) will invoke type-checking of the arguments
                 setattr(self, pname, pvalue)
             else:
@@ -51,8 +50,7 @@ class H2OKMeansEstimator(H2OEstimator):
 
     @training_frame.setter
     def training_frame(self, training_frame):
-        assert_is_type(training_frame, None, H2OFrame)
-        self._parms["training_frame"] = training_frame
+        self._parms["training_frame"] = H2OFrame._validate(training_frame, 'training_frame')
 
 
     @property
@@ -66,8 +64,7 @@ class H2OKMeansEstimator(H2OEstimator):
 
     @validation_frame.setter
     def validation_frame(self, validation_frame):
-        assert_is_type(validation_frame, None, H2OFrame)
-        self._parms["validation_frame"] = validation_frame
+        self._parms["validation_frame"] = H2OFrame._validate(validation_frame, 'validation_frame')
 
 
     @property
@@ -90,7 +87,7 @@ class H2OKMeansEstimator(H2OEstimator):
         """
         Whether to keep the cross-validation models.
 
-        Type: ``bool``  (default: ``False``).
+        Type: ``bool``  (default: ``True``).
         """
         return self._parms.get("keep_cross_validation_models")
 
@@ -250,8 +247,7 @@ class H2OKMeansEstimator(H2OEstimator):
 
     @user_points.setter
     def user_points(self, user_points):
-        assert_is_type(user_points, None, H2OFrame)
-        self._parms["user_points"] = user_points
+        self._parms["user_points"] = H2OFrame._validate(user_points, 'user_points')
 
 
     @property

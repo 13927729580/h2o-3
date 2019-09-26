@@ -1,7 +1,7 @@
 package hex.glm;
 
 import hex.ModelMojoWriter;
-import hex.deeplearning.DeepLearningModel.DeepLearningParameters.MissingValuesHandling;
+import hex.glm.GLMModel.GLMParameters.MissingValuesHandling;
 
 import java.io.IOException;
 
@@ -22,15 +22,14 @@ public class GLMMojoWriter extends ModelMojoWriter<GLMModel, GLMModel.GLMParamet
   @Override
   protected void writeModelData() throws IOException {
     writekv("use_all_factor_levels", model._parms._use_all_factor_levels);
-
     writekv("cats", model.dinfo()._cats);
     writekv("cat_offsets", model.dinfo()._catOffsets);
     writekv("nums", model._output._dinfo._nums);
 
-    boolean imputeMeans = model._parms._missing_values_handling.equals(MissingValuesHandling.MeanImputation);
+    boolean imputeMeans = model._parms.missingValuesHandling().equals(MissingValuesHandling.MeanImputation);
     writekv("mean_imputation", imputeMeans);
     if (imputeMeans) {
-      writekv("num_means", model._output._dinfo._numMeans);
+      writekv("num_means", model.dinfo().numNAFill());
       writekv("cat_modes", model.dinfo().catNAFill());
     }
 

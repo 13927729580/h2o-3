@@ -98,6 +98,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
       if (! (keyed instanceof Grid))
         throw new H2OIllegalArgumentException("Name conflict: tried to create a Grid using the ID of a non-Grid object that's already in H2O: " + _job._result + "; it is a: " + keyed.getClass());
       grid = (Grid) keyed;
+      grid.clearNonRelatedFailures();
       Frame specTrainFrame = _hyperSpaceWalker.getParams().train();
       Frame oldTrainFrame = grid.getTrainingFrame();
       if (oldTrainFrame != null && !specTrainFrame._key.equals(oldTrainFrame._key) ||
@@ -202,13 +203,12 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
           // Do we need to limit the model build time?
           if (max_runtime_secs > 0) {
             Log.info("Grid time is limited to: " + max_runtime_secs + " for grid: " + grid._key + ". Remaining time is: " + time_remaining_secs);
-            double scale = params._nfolds > 0 ? params._nfolds+1 : 1; //remaining time per cv model is less
             if (params._max_runtime_secs == 0) { // unlimited
-              params._max_runtime_secs = time_remaining_secs/scale;
+              params._max_runtime_secs = time_remaining_secs;
               Log.info("Due to the grid time limit, changing model max runtime to: " + params._max_runtime_secs + " secs.");
             } else {
               double was = params._max_runtime_secs;
-              params._max_runtime_secs = Math.min(params._max_runtime_secs, time_remaining_secs/scale);
+              params._max_runtime_secs = Math.min(params._max_runtime_secs, time_remaining_secs);
               Log.info("Due to the grid time limit, changing model max runtime from: " + was + " secs to: " + params._max_runtime_secs + " secs.");
             }
           }
@@ -231,14 +231,15 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
               e.printStackTrace(pw);
               Log.warn("Grid search: model builder for parameters " + params + " failed! Exception: ", e, sw.toString());
             }
-            grid.appendFailedModelParameters(params, e);
+            
+            grid.appendFailedModelParameters(model != null ? model._key : null, params, e);
           }
         } catch (IllegalArgumentException e) {
           Log.warn("Grid search: construction of model parameters failed! Exception: ", e);
           // Model parameters cannot be constructed for some reason
           it.modelFailed(model);
           Object[] rawParams = it.getCurrentRawParameters();
-          grid.appendFailedModelParameters(rawParams, e);
+          grid.appendFailedModelParameters(model != null ? model._key : null, rawParams, e);
         } finally {
           // Update progress by 1 increment
           _job.update(1);
@@ -294,6 +295,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
     }
 
     // Is there a model with the same params in the DKV?
+    @SuppressWarnings("unchecked")
     final Key<Model>[] modelKeys = KeySnapshot.globalSnapshot().filter(new KeySnapshot.KVFilter() {
       @Override
       public boolean filter(KeySnapshot.KeyInfo k) {
@@ -339,26 +341,10 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
     // Build a new model
     // THIS IS BLOCKING call since we do not have enough information about free resources
     // FIXME: we should allow here any launching strategy (not only sequential)
-    Model m = (Model)startBuildModel(result,params, grid).dest().get();
+    assert grid.getModel(params) == null;
+    Model m = ModelBuilder.trainModelNested(_job, result, params, null);
     grid.putModel(checksum, result);
     return m;
-  }
-
-  /**
-   * Triggers model building process but do not block on it.
-   *
-   * @param params parameters for a new model
-   * @param grid   resulting grid object
-   * @return A Future of a model run with these parameters, typically built on demand and not cached
-   * - expected to be an expensive operation.  If the model in question is "in progress", a 2nd
-   * build will NOT be kicked off. This is a non-blocking call.
-   */
-  private ModelBuilder startBuildModel(Key result, MP params, Grid<MP> grid) {
-    if (grid.getModel(params) != null) return null;
-    ModelBuilder mb = ModelBuilder.make(params.algoName(), _job, result);
-    mb._parms = params;
-    mb.trainModelNested(null);
-    return mb;
   }
 
   /**
@@ -458,7 +444,7 @@ public final class GridSearch<MP extends Model.Parameters> extends Keyed<GridSea
             : gridKeyName(params.algoName(), params.train());
 
     // Start the search
-    return new GridSearch(gridKey, hyperSpaceWalker).start();
+    return new GridSearch<>(gridKey, hyperSpaceWalker).start();
   }
 
   /**

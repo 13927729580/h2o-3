@@ -1,20 +1,24 @@
 package hex.genmodel.algos.drf;
 
+import hex.ModelCategory;
 import hex.genmodel.GenModel;
-import hex.genmodel.algos.tree.SharedTreeGraph;
-import hex.genmodel.algos.tree.SharedTreeMojoModel;
-import hex.genmodel.algos.tree.SharedTreeGraphConverter;
+import hex.genmodel.algos.tree.*;
 
 
 /**
  * "Distributed Random Forest" MojoModel
  */
-public final class DrfMojoModel extends SharedTreeMojoModel implements SharedTreeGraphConverter {
+public final class DrfMojoModel extends SharedTreeMojoModelWithContributions implements SharedTreeGraphConverter {
     protected boolean _binomial_double_trees;
 
 
     public DrfMojoModel(String[] columns, String[][] domains, String responseColumn) {
         super(columns, domains, responseColumn);
+    }
+
+    @Override
+    protected ContributionsPredictor getContributionsPredictor(TreeSHAPPredictor<double[]> treeSHAPPredictor) {
+        return new ContributionsPredictorDRF(this, treeSHAPPredictor);
     }
 
     /**
@@ -56,6 +60,33 @@ public final class DrfMojoModel extends SharedTreeMojoModel implements SharedTre
     @Override
     public double[] score0(double[] row, double[] preds) {
         return score0(row, 0.0, preds);
+    }
+    
+    static class ContributionsPredictorDRF extends ContributionsPredictor {
+
+        private final float _featurePlusBiasRatio;
+        private final int _normalizer;
+        
+        private ContributionsPredictorDRF(DrfMojoModel model, TreeSHAPPredictor<double[]> treeSHAPPredictor) {
+            super(model, treeSHAPPredictor);
+            if (ModelCategory.Regression.equals(model._category)) {
+                _featurePlusBiasRatio = 0;
+                _normalizer = model._ntree_groups;
+            } else if (ModelCategory.Binomial.equals(model._category)) {
+                _featurePlusBiasRatio = 1f / (model._nfeatures + 1);
+                _normalizer = -model._ntree_groups;
+            } else 
+                throw new UnsupportedOperationException(
+                        "Model category " + model._category + " cannot be used to calculate feature contributions.");
+        }
+        
+        @Override
+        public float[] getContribs(float[] contribs) {
+            for (int i = 0; i < contribs.length; i++) {
+                contribs[i] = _featurePlusBiasRatio + (contribs[i] / _normalizer);
+            }
+            return contribs;    
+        }
     }
 
 }

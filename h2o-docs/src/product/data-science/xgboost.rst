@@ -12,7 +12,7 @@ The H2O XGBoost implementation is based on two separated modules. The first modu
 
 The second module, `h2o-ext-xgboost <https://github.com/h2oai/h2o-3/tree/master/h2o-extensions/xgboost>`__, contains the actual XGBoost model and model builder code, which communicates with native XGBoost libraries via the JNI API. The module also provides all necessary REST API definitions to expose the XGBoost model builder to clients.
 
-XGBoost in H2O supports multicore, thanks to OpenMP. The multicore implementation will only be available if the system itself supports it. (It has the right version of libraries.) If the requirements are not satisfied, XGBoost will use a fallback that is single core only. Multi-node support is currently available as a Beta feature.
+XGBoost in H2O supports multicore, thanks to OpenMP. The multicore implementation will only be available if the system itself supports it. (It has the right version of libraries.) If the requirements are not satisfied, XGBoost will use a fallback that is single core only.
 
 Refer to the `XGBoost in H2O Machine Learning Platform <https://www.h2o.ai/blog/xgboost-in-h2o-machine-learning-platform/>`__ blog post for an example of how to use XGBoost with the HIGGS dataset. 
 
@@ -63,8 +63,9 @@ Defining an XGBoost Model
 
 -  `stopping_metric <algo-params/stopping_metric.html>`__: Specify the metric to use for early stopping.
    The available options are:
-
-    - ``auto``: This defaults to ``logloss`` for classification, ``deviance`` for regression
+    
+    - ``auto``: This defaults to ``logloss`` for classification, ``deviance`` for regression, and ``anomaly_score`` for Isolation Forest. Note that custom and custom_increasing can only be used in GBM and DRF with the Python client. Must be one of: ``AUTO``, ``anomaly_score``. Defaults to ``AUTO``.
+    - ``anomaly_score`` (Isolation Forest only)
     - ``deviance``
     - ``logloss``
     - ``mse``
@@ -74,7 +75,10 @@ Defining an XGBoost Model
     - ``auc``
     - ``lift_top_group``
     - ``misclassification``
+    - ``aucpr``
     - ``mean_per_class_error``
+    - ``custom`` (Python client only)
+    - ``custom_increasing`` (Python client only)
 
 -  `stopping_tolerance <algo-params/stopping_tolerance.html>`__: Specify the relative tolerance for the metric-based stopping to stop training if the improvement is less than this value. This value defaults to 0.001.
 
@@ -98,14 +102,13 @@ Defining an XGBoost Model
 -  `categorical_encoding <algo-params/categorical_encoding.html>`__: Specify one of the following encoding schemes for handling categorical features:
 
   - ``auto`` or ``AUTO``: Allow the algorithm to decide. In XGBoost, the algorithm will automatically perform ``one_hot_internal`` encoding. (default)
-  - ``enum`` or ``Enum``: 1 column per categorical feature
   - ``one_hot_internal`` or ``OneHotInternal``: On the fly N+1 new cols for categorical features with N levels
   - ``one_hot_explicit`` or ``OneHotExplicit``: N+1 new columns for categorical features with N levels
   - ``binary`` or ``Binary``: No more than 32 columns per categorical feature
   - ``eigen`` or ``Eigen``: *k* columns per categorical feature, keeping projections of one-hot-encoded matrix onto *k*-dim eigen space only
   - ``label_encoder`` or ``LabelEncoder``: Convert every enum into the integer of its index (for example, level 0 -> 0, level 1 -> 1, etc.) 
   - ``sort_by_response`` or ``SortByResponse``: Reorders the levels by the mean response (for example, the level with lowest response -> 0, the level with second-lowest response -> 1, etc.). This is useful, for example, when you have more levels than ``nbins_cats``, and where the top level splits now have a chance at separating the data with a split. 
-  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during training and only keep the **T** most frequent levels.
+  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during training and only keep the **T** (1024) most frequent levels, and then internally do one hot encoding in the case of XGBoost.
 
   **Note**: This value defaults to ``label_encoder``. Similarly, if ``auto`` is specified, then the algorithm performs ``label_encoder`` encoding. 
 
@@ -126,6 +129,8 @@ Defining an XGBoost Model
 -  `col_sample_rate_per_tree <algo-params/col_sample_rate_per_tree.html>`__ (alias: ``colsample_bytree``: Specify the column subsampling rate per tree. (Note that this method is sample without replacement.) This value defaults to 1.0 and can be a value from 0.0 to 1.0. Note that it is multiplicative with ``col_sample_rate``, so setting both parameters to 0.8, for example, results in 64% of columns being considered at any given node to split.
 
 -  `max_abs_leafnode_pred <algo-params/max_abs_leafnode_pred.html>`__ (alias: ``max_delta_step``): Specifies the maximum delta step allowed in each tree’s weight estimation. This value defaults to 0. Setting this value to 0 specifies no constraint. Setting this value to be greater than 0 can help making the update step more conservative and reduce overfitting by limiting the absolute value of a leafe node prediction. This option also helps in logistic regression when a class is extremely imbalanced. 
+
+-  `monotone_constraints <algo-params/monotone_constraints.html>`__: A mapping representing monotonic constraints. Use +1 to enforce an increasing constraint and -1 to specify a decreasing constraint. Note that constraints can only be defined for numerical columns. Also note that this option can only be used when the distribution is either ``gaussian`` or ``bernoulli``. A Python demo is available `here <https://github.com/h2oai/h2o-3/tree/master/h2o-py/demos/H2O_tutorial_gbm_monotonicity.ipynb>`__.
 
 -  `score_tree_interval <algo-params/score_tree_interval.html>`__: Score the model after every so many trees. This value is set to 0 (disabled) by default.
 
@@ -166,7 +171,7 @@ Defining an XGBoost Model
 
 -  **skip_drop**: When ``booster="dart"``, specify a float value from 0 to 1 for the skip drop. This determines the probability of skipping the dropout procedure during a boosting iteration. If a dropout is skipped, new trees are added in the same manner as "gbtree". Note that non-zero ``skip_drop`` has higher priority than ``rate_drop`` or ``one_drop``. This value defaults to 0.0.
 
--  **reg_lambda**: Specify a value for L2 regularization. This defaults to 0.
+-  **reg_lambda**: Specify a value for L2 regularization. This defaults to 1.
 
 -  **reg_alpha**: Specify a value for L1 regularization. This defaults to 0.
 
@@ -177,6 +182,8 @@ Defining an XGBoost Model
 -  **gpu_id**: If a GPU backend is available, specify Which GPU to use. This value defaults to 0.
 
 -  **verbose**: Print scoring history to the console. For XGBoost, metrics are per tree. This value defaults to FALSE.
+
+-  `export_checkpoints_dir <algo-params/export_checkpoints_dir.html>`__: Specify a directory to which generated models will automatically be exported.
 
 "LightGBM" Emulation Mode Options
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -237,17 +244,20 @@ The list of limitations include:
 
   2. The list of supported platforms includes:
  
-    +----------+-----------------+-----+-----+-----------------------+
-    | Platform | Minimal XGBoost | OMP | GPU | Compilation OS        |
-    +==========+=================+=====+=====+=======================+
-    |Linux     | yes             | yes | yes | Ubuntu 14.04, g++ 4.7 |
-    +----------+-----------------+-----+-----+-----------------------+
-    |OS X      | yes             | no  | no  | OS X 10.11            |
-    +----------+-----------------+-----+-----+-----------------------+
-    |Windows   | no              | no  | no  | NA                    |
-    +----------+-----------------+-----+-----+-----------------------+
+    +----------+-----------------+-----+-----+----------------+
+    | Platform | Minimal XGBoost | OMP | GPU | Compilation OS |
+    +==========+=================+=====+=====+================+
+    |Linux     | yes             | yes | yes | CentOS 7       |
+    +----------+-----------------+-----+-----+----------------+
+    |OS X      | yes             | no  | no  | OS X 10.11     |
+    +----------+-----------------+-----+-----+----------------+
+    |Windows   | no              | no  | no  | NA             |
+    +----------+-----------------+-----+-----+----------------+
 
-    **Note**: Minimal XGBoost configuration includes support for a single CPU.
+    **Notes**:
+
+    - Minimal XGBoost configuration includes support for a single CPU.
+    - Testing is done on Ubuntu 16 and CentOS 7 with GCC 5. These can be considered as being supported.
 
   3. Because we are using native XGBoost libraries that depend on OS/platform libraries, it is possible that on older operating systems, XGBoost will not be able to find all necessary binary dependencies, and will not be initialized and available.
 
@@ -295,18 +305,19 @@ FAQs
 
   By default, XGBoost will create N+1 new cols for categorical features with N levels (i.e., ``categorical_encoding="one_hot_internal"``). 
 
--  **Why does my H2O cloud on Hadoop became unresponsive when running XGBoost even when I supplied 4 times the datasize memory?**
+-  **Why does my H2O cluster on Hadoop became unresponsive when running XGBoost even when I supplied 4 times the datasize memory?**
 
-  XGBoost uses memory outside the Java heap, and when that memory is not available, Hadoop kills the h2o job and the h2o cluster becomes unresponsive. Please set ``-extramempercent`` argument to a much higher value when starting H2O. This argument configures the extra memory for internal JVM use outside of the Java heap and is a percentage of mapperXmx. For example:
+  XGBoost uses memory outside the Java heap, and when that memory is not available, Hadoop kills the h2o job and the h2o cluster becomes unresponsive. Please set ``-extramempercent`` argument to a much higher value (120% recommended) when starting H2O. This argument configures the extra memory for internal JVM use outside of the Java heap and is a percentage of mapperXmx. For example:
 
   ::
 
-    hadoop jar h2odriver.jar -nodes 1 -mapperXmx 20g -extramempercent 100
+    hadoop jar h2odriver.jar -nodes 1 -mapperXmx 20g -extramempercent 120
 
 References
 ~~~~~~~~~~
 
 - Chen, Tianqi and Guestrin, Carlos Guestrin. "XGBoost: A Scalable Tree Boosting System." Version 3 (2016) `http://arxiv.org/abs/1603.02754 <http://arxiv.org/abs/1603.02754>`__
 
-
 - Mitchell R, Frank E. (2017) Accelerating the XGBoost algorithm using GPU computing. PeerJ Preprints 5:e2911v1 `https://doi.org/10.7287/peerj.preprints.2911v1 <https://doi.org/10.7287/peerj.preprints.2911v1>`__
+
+

@@ -6,6 +6,8 @@ import water.*;
 import water.nbhm.NonBlockingHashMap;
 import water.util.Log;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.SynchronousQueue;
@@ -21,19 +23,23 @@ public class XGBoostUpdater extends Thread {
   private final Key<XGBoostModel> _modelKey;
   private final DMatrix _trainMat;
   private final BoosterParms _boosterParms;
+  private final byte[] _checkpointBoosterBytes;
   private final Map<String, String> _rabitEnv;
 
-  private SynchronousQueue<BoosterCallable<?>> _in;
-  private SynchronousQueue<Object> _out;
+  private volatile SynchronousQueue<BoosterCallable<?>> _in;
+  private volatile SynchronousQueue<Object> _out;
 
   private Booster _booster;
 
-  private XGBoostUpdater(Key<XGBoostModel> modelKey, DMatrix trainMat, BoosterParms boosterParms,
-                         Map<String, String> rabitEnv) {
+  private XGBoostUpdater(
+      Key<XGBoostModel> modelKey, DMatrix trainMat, BoosterParms boosterParms, 
+      byte[] checkpointBoosterBytes, Map<String, String> rabitEnv
+  ) {
     super("XGBoostUpdater-" + modelKey);
     _modelKey = modelKey;
     _trainMat = trainMat;
     _boosterParms = boosterParms;
+    _checkpointBoosterBytes = checkpointBoosterBytes;
     _rabitEnv = rabitEnv;
     _in = new SynchronousQueue<>();
     _out = new SynchronousQueue<>();
@@ -52,20 +58,28 @@ public class XGBoostUpdater extends Thread {
     } catch (InterruptedException e) {
       XGBoostUpdater self = updaters.get(_modelKey);
       if (self != null) {
-        throw new IllegalStateException("Updater thread was interrupted while it was still registered, name=" + self.getName());
+        Log.err("Updater thread was interrupted while it was still registered, name=" + self.getName());
+        Log.err(e);
+      } else {
+        Log.debug("Updater thread interrupted.", e);
       }
     } catch (XGBoostError e) {
-      throw new IllegalStateException("XGBoost training iteration failed", e);
+      Log.err("XGBoost training iteration failed");
+      Log.err(e);
     } finally {
       _in = null; // Will throw NPE if used wrong
       _out = null;
-      _trainMat.dispose();
-      if (_booster != null)
-        _booster.dispose();
       updaters.remove(_modelKey);
       try {
+        _trainMat.dispose();
+        if (_booster != null)
+          _booster.dispose();
+      } catch (Exception e) {
+        Log.warn("Failed to dispose of training matrix/booster", e);
+      }
+      try {
         Rabit.shutdown();
-      } catch (XGBoostError xgBoostError) {
+      } catch (Exception xgBoostError) {
         Log.warn("Rabit shutdown during update failed", xgBoostError);
       }
     }
@@ -79,10 +93,16 @@ public class XGBoostUpdater extends Thread {
     if (! inQ.offer(callable, WORK_START_TIMEOUT_SECS, TimeUnit.SECONDS))
       throw new IllegalStateException("XGBoostUpdater couldn't start work on task " + callable + " in "  + WORK_START_TIMEOUT_SECS + "s.");
     SynchronousQueue<?> outQ;
+    int i = 0;
     while ((outQ = _out) != null) {
+      i++;
       T result = (T) outQ.poll(INACTIVE_CHECK_INTERVAL_SECS, TimeUnit.SECONDS);
-      if (result != null)
+      if (result != null) {
         return result;
+      } else if (i > 5) {
+        Log.warn(String.format("Exceeded waiting interval of %d seconds for a task of type '%s' to finish on node '%s'. ",
+                INACTIVE_CHECK_INTERVAL_SECS * i, callable, H2O.SELF));
+      }
     }
     throw new IllegalStateException("Cannot perform booster operation: updater is inactive on node " + H2O.SELF);
   }
@@ -96,16 +116,28 @@ public class XGBoostUpdater extends Thread {
     public Booster call() throws XGBoostError {
       if ((_booster == null) && _tid == 0) {
         HashMap<String, DMatrix> watches = new HashMap<>();
-        // Create empty Booster
+        // Create initial Booster
+        Booster checkpointBooster = null;
+        if (_checkpointBoosterBytes != null) {
+          try {
+            checkpointBooster = XGBoost.loadModel(new ByteArrayInputStream(_checkpointBoosterBytes));
+          } catch (IOException e) {
+            throw new RuntimeException("Failed to load checkpoint booster.");
+          }
+        }
         _booster = ml.dmlc.xgboost4j.java.XGBoost.train(_trainMat,
                 _boosterParms.get(),
                 0,
                 watches,
                 null,
-                null);
+                null, 
+                null, 
+                0,
+                checkpointBooster
+              );
         // Force Booster initialization; we can call any method that does "lazy init"
         byte[] boosterBytes = _booster.toByteArray();
-        Log.info("Initial (0 tree) Booster created, size=" + boosterBytes.length);
+        Log.info("Initial Booster created, size=" + boosterBytes.length);
       } else {
         // Do one iteration
         assert _booster != null;
@@ -152,8 +184,9 @@ public class XGBoostUpdater extends Thread {
   }
 
   static XGBoostUpdater make(Key<XGBoostModel> modelKey, DMatrix trainMat, BoosterParms boosterParms,
-                             Map<String, String> rabitEnv) {
-    XGBoostUpdater updater = new XGBoostUpdater(modelKey, trainMat, boosterParms, rabitEnv);
+                             byte[] checkpoint, Map<String, String> rabitEnv) {
+    XGBoostUpdater updater = new XGBoostUpdater(modelKey, trainMat, boosterParms, checkpoint, rabitEnv);
+    updater.setUncaughtExceptionHandler(LoggingExceptionHandler.INSTANCE);
     if (updaters.putIfAbsent(modelKey, updater) != null)
       throw new IllegalStateException("XGBoostUpdater for modelKey=" + modelKey + " already exists!");
     return updater;
@@ -179,4 +212,13 @@ public class XGBoostUpdater extends Thread {
     E call() throws XGBoostError;
   }
 
+  private static class LoggingExceptionHandler implements UncaughtExceptionHandler {
+    private static LoggingExceptionHandler INSTANCE = new LoggingExceptionHandler();
+    @Override
+    public void uncaughtException(Thread t, Throwable e) {
+      Log.err("Uncaught exception in " + t.getName());
+      Log.err(e);
+    }
+  }
+  
 }

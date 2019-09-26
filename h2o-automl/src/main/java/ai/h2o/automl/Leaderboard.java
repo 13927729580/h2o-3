@@ -2,7 +2,6 @@ package ai.h2o.automl;
 
 import hex.*;
 import water.*;
-import water.api.schemas3.KeyV3;
 import water.exceptions.H2OIllegalArgumentException;
 import water.fvec.Frame;
 import water.util.ArrayUtils;
@@ -10,13 +9,9 @@ import water.util.IcedHashMap;
 import water.util.Log;
 import water.util.TwoDimTable;
 
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 
 import static water.DKV.getGet;
-import static water.Key.make;
 
 
 /**
@@ -32,7 +27,7 @@ import static water.Key.make;
  * <p>
  * TODO: make this robust against removal of models from the DKV.
  */
-public class Leaderboard extends Keyed<Leaderboard> {
+public class Leaderboard extends Lockable<Leaderboard> {
   /**
    * Identifier for models that should be grouped together in the leaderboard
    * (e.g., "airlines" and "iris").
@@ -102,10 +97,9 @@ public class Leaderboard extends Keyed<Leaderboard> {
   private boolean have_set_sort_metric = false;
 
   /**
-   * UserFeedback object used to send, um, feedback to the, ah, user.  :-)
-   * Right now this is a "new leader" message.
+   * The eventLog attached to same AutoML instance as this Leaderboard object.
    */
-  private UserFeedback userFeedback;
+  private EventLog eventLog;
 
   /**
    * Frame for which we return the metrics, by default.
@@ -117,51 +111,34 @@ public class Leaderboard extends Keyed<Leaderboard> {
    */
   private long leaderboardFrameChecksum;
 
-  /** HIDEME! */
-  private Leaderboard() {
-    throw new UnsupportedOperationException("Do not call the default constructor Leaderboard().");
-  }
-
   /**
    *
    */
-  public Leaderboard(String project_name, UserFeedback userFeedback, Frame leaderboardFrame, String sort_metric) {
-    this._key = make(idForProject(project_name));
+  public Leaderboard(String project_name, EventLog eventLog, Frame leaderboardFrame, String sort_metric) {
+    super(Key.make(idForProject(project_name)));
     this.project_name = project_name;
-    this.userFeedback = userFeedback;
+    this.eventLog = eventLog;
     this.leaderboardFrame = leaderboardFrame;
     this.leaderboardFrameChecksum = leaderboardFrame == null ? 0 : leaderboardFrame.checksum();
     this.sort_metric = sort_metric == null ? null : sort_metric.toLowerCase();
   }
 
-  static Leaderboard getOrMakeLeaderboard(String project_name, UserFeedback userFeedback, Frame leaderboardFrame, String sort_metric) {
-    Leaderboard exists = DKV.getGet(Key.make(idForProject(project_name)));
-    if (null != exists) {
-      exists.userFeedback = userFeedback;
-      exists.leaderboardFrame = leaderboardFrame;
+  static Leaderboard getOrMake(String project_name, EventLog eventLog, Frame leaderboardFrame, String sort_metric) {
+    Leaderboard leaderboard = DKV.getGet(Key.make(idForProject(project_name)));
+    if (null != leaderboard) {
+      leaderboard.eventLog = eventLog;
+      leaderboard.leaderboardFrame = leaderboardFrame;
       if (sort_metric != null) {
-        exists.sort_metric = sort_metric.toLowerCase();
-        exists.sort_decreasing = exists.sort_metric.equals("auc");
+        leaderboard.sort_metric = sort_metric.toLowerCase();
+        leaderboard.sort_decreasing = leaderboard.sort_metric.equals("auc");
       }
-      exists.leaderboardFrameChecksum = leaderboardFrame == null ? 0 : leaderboardFrame.checksum();
+      leaderboard.leaderboardFrameChecksum = leaderboardFrame == null ? 0 : leaderboardFrame.checksum();
 
-      DKV.put(exists);
-      return exists;
+    } else {
+      leaderboard = new Leaderboard(project_name, eventLog, leaderboardFrame, sort_metric);
     }
-
-    Leaderboard newLeaderboard = new Leaderboard(project_name, userFeedback, leaderboardFrame, sort_metric);
-    DKV.put(newLeaderboard);
-    return newLeaderboard;
-  }
-
-  // satisfy typing for job return type...
-  public static class LeaderboardKeyV3 extends KeyV3<Iced, LeaderboardKeyV3, Leaderboard> {
-    public LeaderboardKeyV3() {
-    }
-
-    public LeaderboardKeyV3(Key<Leaderboard> key) {
-      super(key);
-    }
+    DKV.put(leaderboard);
+    return leaderboard;
   }
 
   public static String idForProject(String project_name) { return "AutoML_Leaderboard_" + project_name; }
@@ -169,6 +146,8 @@ public class Leaderboard extends Keyed<Leaderboard> {
   public String getProject() {
     return project_name;
   }
+
+  private EventLog eventLog() { return eventLog == null ? null : eventLog._key.get(); }
 
   private void setMetricAndDirection(String metric, String[] otherMetrics, boolean sortDecreasing) {
     this.sort_metric = metric;
@@ -225,125 +204,92 @@ public class Leaderboard extends Keyed<Leaderboard> {
     final Key<Model> newLeader[] = new Key[1]; // only set if there's a new leader
     final double newLeaderSortMetric[] = new double[1];
 
-    new TAtomic<Leaderboard>() {
-      @Override
-      final public Leaderboard atomic(Leaderboard updating) {
-        if (updating == null) {
-          Log.err("trying to update null leaderboard!");
-          throw new H2OIllegalArgumentException("Trying to update a null leaderboard.");
+    write_lock(); //no job/key needed as currently the leaderboard instance can only be updated by its corresponding AutoML job (otherwise, would need to pass a job param to addModels)
+    final Key<Model>[] oldModels = models;
+    final Key<Model> oldLeader = (oldModels == null || 0 == oldModels.length) ? null : oldModels[0];
+
+    // eliminate duplicates
+    Set<Key<Model>> uniques = new HashSet<>(oldModels.length + newModels.length);
+    uniques.addAll(Arrays.asList(oldModels));
+    uniques.addAll(Arrays.asList(newModels));
+    models = uniques.toArray(new Key[0]);
+
+    // Try fetching ModelMetrics for *all* models, not just
+    // new models, because the leaderboardFrame might have changed.
+    leaderboard_set_metrics = new IcedHashMap<>();
+    Model model = null;
+    for (Key<Model> aKey : models) {
+      model = aKey.get();
+      if (null == model) {
+        eventLog().warn(EventLogEntry.Stage.ModelTraining, "Model in the leaderboard has unexpectedly been deleted from H2O: " + aKey);
+        continue;
+      }
+
+      // If leaderboardFrame is null, use default model metrics instead
+      ModelMetrics mm = null;
+      if (leaderboardFrame == null) {
+        mm = ModelMetrics.defaultModelMetrics(model);
+      } else {
+        mm = ModelMetrics.getFromDKV(model, leaderboardFrame);
+        if (mm == null) {
+          //scores and magically stores the metrics where we're looking for it on the next line
+          model.score(leaderboardFrame).delete();
+          mm = ModelMetrics.getFromDKV(model, leaderboardFrame);
         }
-
-        final Key<Model>[] oldModels = updating.models;
-        final Key<Model> oldLeader = (oldModels == null || 0 == oldModels.length) ? null : oldModels[0];
-
-        // eliminate duplicates
-        Set<Key<Model>> uniques = new HashSet(oldModels.length + newModels.length);
-        uniques.addAll(Arrays.asList(oldModels));
-        uniques.addAll(Arrays.asList(newModels));
-        updating.models = uniques.toArray(new Key[0]);
-
-        // Try fetching ModelMetrics for *all* models, not just
-        // new models, because the leaderboardFrame might have changed.
-        updating.leaderboard_set_metrics = new IcedHashMap<>();
-        Model aModel = null;
-        for (Key<Model> aKey : updating.models) {
-          aModel = aKey.get();
-          if (null == aModel) {
-            userFeedback.warn(UserFeedbackEvent.Stage.ModelTraining, "Model in the leaderboard has unexpectedly been deleted from H2O: " + aKey);
-            continue;
-          }
-
-          // If leaderboardFrame is null, use xval metrics instead
-          ModelMetrics mm = null;
-          if (leaderboardFrame == null) {
-            mm = aModel._output._cross_validation_metrics;
-          } else {
-            mm = ModelMetrics.getFromDKV(aModel, leaderboardFrame);
-            if (mm == null) {
-              //scores and magically stores the metrics where we're looking for it on the next line
-              aModel.score(leaderboardFrame).delete();  // immediately delete the resulting frame to avoid leaks
-              mm = ModelMetrics.getFromDKV(aModel, leaderboardFrame);
-            }
-          }
-          if (mm != null) updating.leaderboard_set_metrics.put(mm._key, mm);
-        }
-
-        // Sort by metric on the leaderboard/test set or cross-validation metrics.
-        try {
-          List<Key<Model>> modelsSorted = null;
-          if (leaderboardFrame == null) {
-            modelsSorted = ModelMetrics.sortModelsByMetric(sort_metric, sort_decreasing, Arrays.asList(updating.models));
-          } else {
-            modelsSorted = ModelMetrics.sortModelsByMetric(leaderboardFrame, sort_metric, sort_decreasing, Arrays.asList(updating.models));
-          }
-          updating.models = modelsSorted.toArray(new Key[0]);
-        } catch (H2OIllegalArgumentException e) {
-          Log.warn("ModelMetrics.sortModelsByMetric failed: " + e);
-          throw e;
-        }
-
-        Model[] updating_models = new Model[updating.models.length];
-        modelsForModelKeys(updating.models, updating_models);
-
-        updating.sort_metrics = getMetrics(updating.sort_metric, updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-
-        if (aModel._output.isBinomialClassifier()) { // Binomial case
-          updating.auc = getMetrics("auc", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.logloss = getMetrics("logloss", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.mean_per_class_error = getMetrics("mean_per_class_error", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.rmse = getMetrics("rmse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.mse = getMetrics("mse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-        } else if (aModel._output.isMultinomialClassifier()) { //Multinomial Case
-          updating.mean_per_class_error = getMetrics("mean_per_class_error", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.logloss = getMetrics("logloss", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.rmse = getMetrics("rmse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.mse = getMetrics("mse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-        } else { //Regression Case
-          updating.mean_residual_deviance= getMetrics("mean_residual_deviance", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.rmse = getMetrics("rmse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.mse = getMetrics("mse", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.mae = getMetrics("mae", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-          updating.rmsle = getMetrics("rmsle", updating.leaderboard_set_metrics, leaderboardFrame, updating_models);
-        }
-
-        // If we're updated leader let this know so that it can notify the user
-        // (outside the tatomic, since it can take a long time).
-        if (oldLeader == null || !oldLeader.equals(updating.models[0])) {
-          newLeader[0] = updating.models[0];
-          newLeaderSortMetric[0] = updating.sort_metrics[0];
-        }
-
-        return updating;
-      } // atomic
-    }.invoke(this._key);
-
-    // We've updated the DKV but not this instance, so:
-    Leaderboard updated = DKV.getGet(this._key);
-    this.models = updated.models;
-    this.leaderboard_set_metrics = updated.leaderboard_set_metrics;
-    this.sort_metrics = updated.sort_metrics;
-    if (updated.getLeader()._output.isBinomialClassifier()) { // Binomial case
-      this.auc = updated.auc;
-      this.logloss = updated.logloss;
-      this.mean_per_class_error = updated.mean_per_class_error;
-      this.rmse = updated.rmse;
-      this.mse = updated.mse;
-    } else if (updated.getLeader()._output.isMultinomialClassifier()) { // Multinomial case
-      this.mean_per_class_error = updated.mean_per_class_error;
-      this.logloss = updated.logloss;
-      this.rmse = updated.rmse;
-      this.mse = updated.mse;
-    } else { // Regression case
-      this.mean_residual_deviance = updated.mean_residual_deviance;
-      this.rmse = updated.rmse;
-      this.mse = updated.mse;
-      this.mae = updated.mae;
-      this.rmsle = updated.rmsle;
+      }
+      if (mm != null) leaderboard_set_metrics.put(mm._key, mm);
     }
+
+    // Sort by metric on the leaderboard/test set or default model metrics.
+    try {
+      List<Key<Model>> modelsSorted = null;
+      if (leaderboardFrame == null) {
+        modelsSorted = ModelMetrics.sortModelsByMetric(sort_metric, sort_decreasing, Arrays.asList(models));
+      } else {
+        modelsSorted = ModelMetrics.sortModelsByMetric(leaderboardFrame, sort_metric, sort_decreasing, Arrays.asList(models));
+      }
+      models = modelsSorted.toArray(new Key[0]);
+    } catch (H2OIllegalArgumentException e) {
+      Log.warn("ModelMetrics.sortModelsByMetric failed: " + e);
+      throw e;
+    }
+
+    Model[] updating_models = new Model[models.length];
+    modelsForModelKeys(models, updating_models);
+
+    sort_metrics = getMetrics(sort_metric, leaderboard_set_metrics, leaderboardFrame, updating_models);
+
+    if (model._output.isBinomialClassifier()) { // Binomial case
+      auc = getMetrics("auc", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      logloss = getMetrics("logloss", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      mean_per_class_error = getMetrics("mean_per_class_error", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      rmse = getMetrics("rmse", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      mse = getMetrics("mse", leaderboard_set_metrics, leaderboardFrame, updating_models);
+    } else if (model._output.isMultinomialClassifier()) { //Multinomial Case
+      mean_per_class_error = getMetrics("mean_per_class_error", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      logloss = getMetrics("logloss", leaderboard_set_metrics, leaderboardFrame, updating_models);
+      rmse = getMetrics("rmse",leaderboard_set_metrics, leaderboardFrame, updating_models);
+      mse = getMetrics("mse",leaderboard_set_metrics, leaderboardFrame, updating_models);
+    } else { //Regression Case
+      mean_residual_deviance= getMetrics("mean_residual_deviance",leaderboard_set_metrics, leaderboardFrame, updating_models);
+      rmse = getMetrics("rmse",leaderboard_set_metrics, leaderboardFrame, updating_models);
+      mse = getMetrics("mse",leaderboard_set_metrics, leaderboardFrame, updating_models);
+      mae = getMetrics("mae",leaderboard_set_metrics, leaderboardFrame, updating_models);
+      rmsle = getMetrics("rmsle",leaderboard_set_metrics, leaderboardFrame, updating_models);
+    }
+
+    // If we're updated leader let this know so that it can notify the user
+    // (outside the tatomic, since it can take a long time).
+    if (oldLeader == null || !oldLeader.equals(models[0])) {
+      newLeader[0] = models[0];
+      newLeaderSortMetric[0] = sort_metrics[0];
+    }
+    update();
+    unlock();
 
     // always
     if (null != newLeader[0]) {
-      userFeedback.info(UserFeedbackEvent.Stage.ModelTraining,
+      eventLog().info(EventLogEntry.Stage.ModelTraining,
               "New leader: " + newLeader[0] + ", " + sort_metric + ": " + newLeaderSortMetric[0]);
     }
   } // addModels
@@ -377,7 +323,8 @@ public class Leaderboard extends Keyed<Leaderboard> {
    * @return list of keys of models sorted by the default metric for the model category, fetched from the DKV
    */
   Key<Model>[] getModelKeys() {
-    return ((Leaderboard)DKV.getGet(this._key)).models;
+    Leaderboard uptodate = DKV.getGet(this._key);
+    return uptodate == null ? new Key[0] : uptodate.models;
   }
 
   /**
@@ -431,53 +378,68 @@ public class Leaderboard extends Keyed<Leaderboard> {
     for (Model m : models) {
       // If leaderboard frame exists, get metrics from there
       if (leaderboardFrame != null) {
-        //System.out.println("@@@@@@@@@@@@@ Leaderboard frame metrics @@@@@@@@@@@@@");
-        other_metrics[i++] = ModelMetrics.getMetricFromModelMetric(leaderboard_set_metrics.get(ModelMetrics.buildKey(m, leaderboardFrame)), metric);
+        other_metrics[i++] = ModelMetrics.getMetricFromModelMetric(
+            leaderboard_set_metrics.get(ModelMetrics.buildKey(m, leaderboardFrame)),
+            metric
+        );
       } else {
-        // otherwise use cross-validation metrics
-        //System.out.println("@@@@@@@@@@@@@ Cross-validation frame metrics @@@@@@@@@@@@@");
+        // otherwise use default model metrics
         Key model_key = m._key;
         long model_checksum = m.checksum();
-        Key frame_key = m._output._cross_validation_metrics.frame()._key;
-        long frame_checksum = m._output._cross_validation_metrics.frame().checksum();
-        other_metrics[i++] = ModelMetrics.getMetricFromModelMetric(leaderboard_set_metrics.get(ModelMetrics.buildKey(model_key, model_checksum, frame_key, frame_checksum)), metric);
+        ModelMetrics mm = ModelMetrics.defaultModelMetrics(m);
+        other_metrics[i++] = ModelMetrics.getMetricFromModelMetric(
+            leaderboard_set_metrics.get(ModelMetrics.buildKey(model_key, model_checksum, mm.frame()._key, mm.frame().checksum())),
+            metric
+        );
       }
     }
     return other_metrics;
   }
 
   /**
-   * Delete everything in the DKV that this points to.  We currently need to be able to call this after deleteWithChildren().
+   * Delete object and its dependencies from DKV, including models.
    */
-  void delete() {
+  @Override
+  protected Futures remove_impl(Futures fs, boolean cascade) {
+    Log.debug("Cleaning up leaderboard from models "+Arrays.toString(models));
+    if (cascade) {
+      for (Key<Model> m : models) {
+        Keyed.remove(m, fs, true);
+      }
+    }
     for (Key k : leaderboard_set_metrics.keySet())
-      k.remove();
-    remove();
-  }
-
-  void deleteWithChildren() {
-    for (Model m : getModels())
-      m.delete();
-    delete();
+      Keyed.remove(k, fs, true);
+    return super.remove_impl(fs, cascade);
   }
 
   private static double[] defaultMetricForModel(Model m) {
-    ModelMetrics mm =
-            m._output._cross_validation_metrics != null ?
-                    m._output._cross_validation_metrics :
-                    m._output._validation_metrics != null ?
-                            m._output._validation_metrics :
-                            m._output._training_metrics;
-    return defaultMetricForModel(m, mm);
+    return defaultMetricForModel(m, ModelMetrics.defaultModelMetrics(m));
   }
 
   private static double[] defaultMetricForModel(Model m, ModelMetrics mm) {
     if (m._output.isBinomialClassifier()) {
-      return new double[] {(((ModelMetricsBinomial)mm).auc()),((ModelMetricsBinomial) mm).logloss(), ((ModelMetricsBinomial) mm).mean_per_class_error(), mm.rmse(), mm.mse()};
+      return new double[] {
+          ((ModelMetricsBinomial) mm).auc(),
+          ((ModelMetricsBinomial) mm).logloss(),
+          ((ModelMetricsBinomial) mm).mean_per_class_error(),
+          mm.rmse(),
+          mm.mse()
+      };
     } else if (m._output.isMultinomialClassifier()) {
-      return new double[] {(((ModelMetricsMultinomial)mm).mean_per_class_error()), ((ModelMetricsMultinomial) mm).logloss(), mm.rmse(), mm.mse()};
+      return new double[] {
+          ((ModelMetricsMultinomial) mm).mean_per_class_error(),
+          ((ModelMetricsMultinomial) mm).logloss(),
+          mm.rmse(),
+          mm.mse()
+      };
     } else if (m._output.isSupervised()) {
-      return new double[] {((ModelMetricsRegression)mm).mean_residual_deviance(),mm.rmse(), mm.mse(), ((ModelMetricsRegression) mm).mae(), ((ModelMetricsRegression) mm).rmsle()};
+      return new double[] {
+          ((ModelMetricsRegression)mm).mean_residual_deviance(),
+          mm.rmse(),
+          mm.mse(),
+          ((ModelMetricsRegression) mm).mae(),
+          ((ModelMetricsRegression) mm).rmsle()
+      };
     }
     Log.warn("Failed to find metric for model: " + m);
     return new double[] {Double.NaN};
@@ -485,28 +447,26 @@ public class Leaderboard extends Keyed<Leaderboard> {
 
   private static String[] defaultMetricNameForModel(Model m) {
     if (m._output.isBinomialClassifier()) {
-      return new String[] {"auc","logloss", "mean_per_class_error", "rmse", "mse"};
+      return new String[] {"auc", "logloss", "mean_per_class_error", "rmse", "mse"};
     } else if (m._output.isMultinomialClassifier()) {
       return new String[] {"mean per-class error", "logloss", "rmse", "mse"};
     } else if (m._output.isSupervised()) {
-      return new String[] {"mean_residual_deviance","rmse", "mse", "mae","rmsle"};
+      return new String[] {"mean_residual_deviance", "rmse", "mse", "mae", "rmsle"};
     }
     return new String[] {"unknown"};
   }
 
   String rankTsv() {
-    String fieldSeparator = "\\t";
-    String lineSeparator = "\\n";
+    String lineSeparator = "\n";
 
-    StringBuffer sb = new StringBuffer();
-//  sb.append("Rank").append(fieldSeparator).append("Error").append(lineSeparator);
+    StringBuilder sb = new StringBuilder();
     sb.append("Error").append(lineSeparator);
 
     Model[] models = getModels();
     for (int i = models.length - 1; i >= 0; i--) {
       // TODO: allow the metric to be passed in.  Note that this assumes the validation (or training) frame is the same.
       Model m = models[i];
-      sb.append(defaultMetricForModel(m));
+      sb.append(Arrays.toString(defaultMetricForModel(m)));
       sb.append(lineSeparator);
     }
     return sb.toString();
@@ -569,14 +529,14 @@ public class Leaderboard extends Keyed<Leaderboard> {
           "%.6f"
   };
 
-  private static TwoDimTable makeTwoDimTable(String tableHeader, String sort_metric, String[] other_metrics, int length, Model[] models) {
-    assert sort_metric != null || length == 0 :
+  private static final TwoDimTable makeTwoDimTable(String tableHeader, String sort_metric, String[] other_metrics, Model[] models) {
+    assert sort_metric != null || models.length == 0 :
         "sort_metrics needs to be always not-null for non-empty array!";
 
-    String[] rowHeaders = new String[length];
-    for (int i = 0; i < length; i++) rowHeaders[i] = "" + i;
+    String[] rowHeaders = new String[models.length];
+    for (int i = 0; i < models.length; i++) rowHeaders[i] = "" + i;
 
-    if (sort_metric == null && length == 0) {
+    if (models.length == 0) {
       // empty TwoDimTable
       return new TwoDimTable(tableHeader,
               "no models in this leaderboard",
@@ -651,7 +611,7 @@ public class Leaderboard extends Keyed<Leaderboard> {
   }
 
   public TwoDimTable toTwoDimTable() {
-    return toTwoDimTable("Leaderboard for project_name: " + project_name, false);
+    return toTwoDimTable("Leaderboard for AutoML: " + project_name, false);
   }
 
   TwoDimTable toTwoDimTable(String tableHeader, boolean leftJustifyModelIds) {
@@ -671,7 +631,7 @@ public class Leaderboard extends Keyed<Leaderboard> {
       this.other_metrics = new String[] {"rmse", "mse", "mae","rmsle"};
     }
 
-    TwoDimTable table = makeTwoDimTable(tableHeader, sort_metric, other_metrics, models.length, models);
+    TwoDimTable table = makeTwoDimTable(tableHeader, sort_metric, other_metrics, models);
 
     // %-s doesn't work in TwoDimTable.toString(), so fake it here:
     int maxModelIdLen = -1;

@@ -59,7 +59,7 @@ Defining a GBM Model
 
 -  `ntrees <algo-params/ntrees.html>`__: Specify the number of trees to build.
 
--  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth.
+-  `max_depth <algo-params/max_depth.html>`__: Specify the maximum tree depth. Higher values will make the model more complex and can lead to overfitting. Setting this value to 0 specifies no limit. This value defaults to 5.
 
 -  `min_rows <algo-params/min_rows.html>`__: Specify the minimum number of observations for a leaf
    (``nodesize`` in R).
@@ -126,7 +126,7 @@ Defining a GBM Model
 
   - ``auto`` or ``AUTO``: Allow the algorithm to decide (default). In GBM, the algorithm will automatically perform ``enum`` encoding.
   - ``enum`` or ``Enum``: 1 column per categorical feature
-  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during Aggregator training and only keep the **T** most frequent levels.
+  - ``enum_limited`` or ``EnumLimited``: Automatically reduce categorical levels to the most prevalent ones during training and only keep the **T** (1024) most frequent levels.
   - ``one_hot_explicit`` or ``OneHotExplicit``: N+1 new columns for categorical features with N levels
   - ``binary``: No more than 32 columns per categorical feature
   - ``eigen`` or ``Eigen``: *k* columns per categorical feature, keeping projections of one-hot-encoded matrix onto *k*-dim eigen space only
@@ -194,8 +194,9 @@ Defining a GBM Model
 
 -  `stopping_metric <algo-params/stopping_metric.html>`__: Specify the metric to use for early stopping.
    The available options are:
-
-    - ``auto``: This defaults to ``logloss`` for classification, ``deviance`` for regression
+    
+    - ``auto``: This defaults to ``logloss`` for classification, ``deviance`` for regression, and ``anomaly_score`` for Isolation Forest. Note that custom and custom_increasing can only be used in GBM and DRF with the Python client. Must be one of: ``AUTO``, ``anomaly_score``. Defaults to ``AUTO``.
+    - ``anomaly_score`` (Isolation Forest only)
     - ``deviance``
     - ``logloss``
     - ``mse``
@@ -205,7 +206,10 @@ Defining a GBM Model
     - ``auc``
     - ``lift_top_group``
     - ``misclassification``
+    - ``aucpr``
     - ``mean_per_class_error``
+    - ``custom`` (Python client only)
+    - ``custom_increasing`` (Python client only)
 
 -  `stopping_tolerance <algo-params/stopping_tolerance.html>`__: Specify the relative tolerance for the
    metric-based stopping to stop training if the improvement is less
@@ -229,6 +233,10 @@ Defining a GBM Model
    Poisson-gamma distribution, enter a value greater than 1 but less
    than 2. For more information, refer to `Tweedie
    distribution <https://en.wikipedia.org/wiki/Tweedie_distribution>`__.
+
+- `upload_custom_distribution <algo-params/upload_custom_distribution.html>`__: Upload a custom distribution into a running H2O cluster.
+
+- `upload_custom_metric <algo-params/upload_custom_metric.html>`__: Upload a custom metric into a running H2O cluster.
 
 -  `huber_alpha <algo-params/huber_alpha.html>`__: Specify the desired quantile for Huber/M-regression (the threshold between quadratic and linear loss). This value must be between 0 and 1.
 
@@ -255,6 +263,16 @@ Defining a GBM Model
 -  `calibrate_model <algo-params/calibrate_model.html>`__: Use Platt scaling to calculate calibrated class probabilities. Defaults to False.
 
 -  `calibration_frame <algo-params/calibration_frame.html>`__: Specifies the frame to be used for Platt scaling.
+
+-  `custom_metric_func <algo-params/custom_metric_func.html>`__: Optionally specify a custom evaluation function.
+
+-  `custom_distribution_func <algo-params/custom_distribution_func.html>`__: Optionally specify a custom distribution function. A demo for the custom distribution function is available here: https://github.com/h2oai/h2o-3/blob/master/h2o-py/demos/custom_loss_function_demo.ipynb
+
+-  `export_checkpoints_dir <algo-params/export_checkpoints_dir.html>`__: Specify a directory to which generated models will automatically be exported.
+
+-  `monotone_constraints <algo-params/monotone_constraints.html>`__: A mapping representing monotonic constraints. Use +1 to enforce an increasing constraint and -1 to specify a decreasing constraint. Note that constraints can only be defined for numerical columns. Also note that this option can only be used when the distribution is either ``gaussian`` or ``bernoulli``. A Python demo is available `here <https://github.com/h2oai/h2o-3/tree/master/h2o-py/demos/H2O_tutorial_gbm_monotonicity.ipynb>`__.
+
+-  `check_constant_response <algo-params/check_constant_response.html>`__: Check if the response column is a constant value. If enabled (default), then an exception is thrown if the response column is a constant value. If disabled, then the model will train regardless of the response column being a constant value or not.
 
 -  **verbose**: Print scoring history to the console. For GBM, metrics are per tree. This value defaults to FALSE.
 

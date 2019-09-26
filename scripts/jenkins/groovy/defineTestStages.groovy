@@ -6,11 +6,13 @@ def call(final pipelineContext) {
   def MODE_XGB_CODE = 3
   def MODE_COVERAGE_CODE = 4
   def MODE_SINGLE_TEST_CODE = 5
+  def MODE_KERBEROS_CODE = 6
   def MODE_MASTER_CODE = 10
   def MODE_NIGHTLY_CODE = 20
   def MODES = [
     [name: 'MODE_PR', code: MODE_PR_CODE],
     [name: 'MODE_HADOOP', code: MODE_HADOOP_CODE],
+    [name: 'MODE_KERBEROS', code: MODE_KERBEROS_CODE],
     [name: 'MODE_XGB', code: MODE_XGB_CODE],
     [name: 'MODE_COVERAGE', code: MODE_COVERAGE_CODE],
     [name: 'MODE_SINGLE_TEST', code: MODE_SINGLE_TEST_CODE],
@@ -32,12 +34,8 @@ def call(final pipelineContext) {
       component: pipelineContext.getBuildConfig().COMPONENT_R
     ],
     [
-      stageName: 'PhantomJS Smoke', target: 'test-phantom-js-smoke',timeoutValue: 20,
+      stageName: 'Flow Headless Smoke', target: 'test-flow-headless-smoke',timeoutValue: 20,
       component: pipelineContext.getBuildConfig().COMPONENT_JS
-    ],
-    [
-      stageName: 'Java 7 Smoke (no h2o-algos multinode)', target: 'test-junit-7-smoke-jenkins', javaVersion: 7, timeoutValue: 20,
-      component: pipelineContext.getBuildConfig().COMPONENT_JAVA
     ],
     [
       stageName: 'Java 8 Smoke', target: 'test-junit-smoke-jenkins', javaVersion: 8, timeoutValue: 20,
@@ -49,6 +47,10 @@ def call(final pipelineContext) {
      ],
     [
       stageName: 'Java 11 Smoke', target: 'test-junit-11-smoke-jenkins', javaVersion: 11, timeoutValue: 20,
+      component: pipelineContext.getBuildConfig().COMPONENT_JAVA
+    ],
+    [
+      stageName: 'Java 12 Smoke', target: 'test-junit-12-smoke-jenkins', javaVersion: 12, timeoutValue: 20,
       component: pipelineContext.getBuildConfig().COMPONENT_JAVA
     ]
   ]
@@ -66,11 +68,6 @@ def call(final pipelineContext) {
     [
       stageName: 'Py2.7 Demos', target: 'test-py-demos', pythonVersion: '2.7',
       timeoutValue: 30, component: pipelineContext.getBuildConfig().COMPONENT_PY
-    ],
-    [
-      stageName: 'Py2.7 Init Java 7', target: 'test-py-init', pythonVersion: '2.7', javaVersion: 7,
-      timeoutValue: 10, hasJUnit: false, component: pipelineContext.getBuildConfig().COMPONENT_PY,
-      image: "${pipelineContext.getBuildConfig().DOCKER_REGISTRY}/opsh2oai/h2o-3/dev-jdk-7:${pipelineContext.getBuildConfig().DEFAULT_IMAGE_VERSION_TAG}"
     ],
     [
       stageName: 'Py2.7 Init Java 8', target: 'test-py-init', pythonVersion: '2.7', javaVersion: 8,
@@ -96,11 +93,6 @@ def call(final pipelineContext) {
       timeoutValue: 90, component: pipelineContext.getBuildConfig().COMPONENT_PY
     ],
     [
-      stageName: 'R3.4 Init Java 7', target: 'test-r-init', rVersion: '3.4.1', javaVersion: 7,
-      timeoutValue: 10, hasJUnit: false, component: pipelineContext.getBuildConfig().COMPONENT_R,
-      image: "${pipelineContext.getBuildConfig().DOCKER_REGISTRY}/opsh2oai/h2o-3/dev-r-3.4.1-jdk-7:${pipelineContext.getBuildConfig().DEFAULT_IMAGE_VERSION_TAG}"
-    ],
-    [
       stageName: 'R3.4 Init Java 8', target: 'test-r-init', rVersion: '3.4.1', javaVersion: 8,
       timeoutValue: 10, hasJUnit: false, component: pipelineContext.getBuildConfig().COMPONENT_R,
       image: "${pipelineContext.getBuildConfig().DOCKER_REGISTRY}/opsh2oai/h2o-3/dev-r-3.4.1-jdk-8:${pipelineContext.getBuildConfig().DEFAULT_IMAGE_VERSION_TAG}"
@@ -121,6 +113,10 @@ def call(final pipelineContext) {
     ],
     [
       stageName: 'R3.4 Small Client Mode', target: 'test-r-small-client-mode', rVersion: '3.4.1',
+      timeoutValue: 155, component: pipelineContext.getBuildConfig().COMPONENT_R
+    ],
+    [
+      stageName: 'R3.4 Small Client Mode Disconnect Attack', target: 'test-r-small-client-mode-attack', rVersion: '3.4.1',
       timeoutValue: 155, component: pipelineContext.getBuildConfig().COMPONENT_R
     ],
     [
@@ -148,12 +144,12 @@ def call(final pipelineContext) {
       timeoutValue: 15, component: pipelineContext.getBuildConfig().COMPONENT_R
     ],
     [
-      stageName: 'PhantomJS', target: 'test-phantom-js',
+      stageName: 'Flow Headless', target: 'test-flow-headless',
       timeoutValue: 75, component: pipelineContext.getBuildConfig().COMPONENT_JS
     ],
     [
       stageName: 'Py3.6 Medium-large', target: 'test-pyunit-medium-large', pythonVersion: '3.5',
-      timeoutValue: 120, component: pipelineContext.getBuildConfig().COMPONENT_PY
+      timeoutValue: 150, component: pipelineContext.getBuildConfig().COMPONENT_PY
     ],
     [
       stageName: 'R3.4 Medium-large', target: 'test-r-medium-large', rVersion: '3.4.1',
@@ -175,12 +171,24 @@ def call(final pipelineContext) {
       stageName: 'Java 8 JUnit', target: 'test-junit-jenkins', pythonVersion: '2.7', javaVersion: 8,
       timeoutValue: 180, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
     ],
-     [
-       stageName: 'Java 10 JUnit', target: 'test-junit-10-jenkins', pythonVersion: '2.7', javaVersion: 10,
-       timeoutValue: 180, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
-     ],
+    [
+      stageName: 'Java 8 AutoML JUnit', target: 'test-junit-automl-jenkins', pythonVersion: '2.7', javaVersion: 8,
+      timeoutValue: 40, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
+    ],
+    [
+      stageName: 'Java 8 XGBoost Multinode JUnit', target: 'test-junit-xgb-multi-jenkins', pythonVersion: '2.7', javaVersion: 8,
+      timeoutValue: 120, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
+    ],
+    [
+      stageName: 'Java 10 JUnit', target: 'test-junit-10-jenkins', pythonVersion: '2.7', javaVersion: 10,
+      timeoutValue: 180, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
+    ],
     [
       stageName: 'Java 11 JUnit', target: 'test-junit-11-jenkins', pythonVersion: '2.7', javaVersion: 11,
+      timeoutValue: 180, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
+    ],
+    [
+      stageName: 'Java 12 JUnit', target: 'test-junit-12-jenkins', pythonVersion: '2.7', javaVersion: 12,
       timeoutValue: 180, component: pipelineContext.getBuildConfig().COMPONENT_JAVA, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
     ],
     [
@@ -189,9 +197,11 @@ def call(final pipelineContext) {
       archiveAdditionalFiles: ['r-generated-docs.zip'], installRPackage: false
     ],
     [
-      stageName: 'MOJO Compatibility', target: 'test-mojo-compatibility',
-      archiveFiles: false, timeoutValue: 20, pythonVersion: '3.6', hasJUnit: false,
-      component: pipelineContext.getBuildConfig().COMPONENT_ANY, additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
+      stageName: 'MOJO Compatibility (Java 7)', target: 'test-mojo-compatibility',
+      archiveFiles: false, timeoutValue: 20, hasJUnit: false, pythonVersion: '3.6', javaVersion: 7,
+      component: pipelineContext.getBuildConfig().COMPONENT_JAVA, // only run when Java changes (R/Py cannot affect mojo) 
+      imageSpecifier: "mojocompat",
+      additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_PY]
     ]
   ]
 
@@ -201,6 +211,13 @@ def call(final pipelineContext) {
       timeoutValue: 120, target: 'benchmark', component: pipelineContext.getBuildConfig().COMPONENT_ANY,
       additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_R],
       customData: [algorithm: 'gbm'], makefilePath: pipelineContext.getBuildConfig().BENCHMARK_MAKEFILE_PATH,
+      nodeLabel: pipelineContext.getBuildConfig().getBenchmarkNodeLabel()
+    ],
+    [
+      stageName: 'GLM Benchmark', executionScript: 'h2o-3/scripts/jenkins/groovy/benchmarkStage.groovy',
+      timeoutValue: 120, target: 'benchmark', component: pipelineContext.getBuildConfig().COMPONENT_ANY,
+      additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_R],
+      customData: [algorithm: 'glm'], makefilePath: pipelineContext.getBuildConfig().BENCHMARK_MAKEFILE_PATH,
       nodeLabel: pipelineContext.getBuildConfig().getBenchmarkNodeLabel()
     ],
     [
@@ -240,18 +257,21 @@ def call(final pipelineContext) {
       timeoutValue: 40, component: pipelineContext.getBuildConfig().COMPONENT_R
     ],
     [
-      stageName: 'PhantomJS Small', target: 'test-phantom-js-small',
+      stageName: 'Flow Headless Small', target: 'test-flow-headless-small',
       timeoutValue: 75, component: pipelineContext.getBuildConfig().COMPONENT_JS
     ],
     [
-      stageName: 'PhantomJS Medium', target: 'test-phantom-js-medium',
+      stageName: 'Flow Headless Medium', target: 'test-flow-headless-medium',
       timeoutValue: 75, component: pipelineContext.getBuildConfig().COMPONENT_JS
     ]
   ]
-  MASTER_STAGES += BENCHMARK_STAGES
 
   // Stages executed in addition to MASTER_STAGES, used for nightly builds.
   def NIGHTLY_STAGES = [
+    [
+      stageName: 'Java 13 Smoke', target: 'test-junit-13-smoke-jenkins', javaVersion: 13, timeoutValue: 20,
+      component: pipelineContext.getBuildConfig().COMPONENT_JAVA
+    ],
     [
       stageName: 'Py2.7 Single Node', target: 'test-pyunit-single-node', pythonVersion: '2.7',
       timeoutValue: 40, component: pipelineContext.getBuildConfig().COMPONENT_PY
@@ -311,18 +331,46 @@ def call(final pipelineContext) {
     [
       stageName: 'R3.3 CMD Check as CRAN', target: 'test-r-cmd-check-as-cran', rVersion: '3.3.3',
       timeoutValue: 10, hasJUnit: false, component: pipelineContext.getBuildConfig().COMPONENT_R
+    ],
+    [ // These run with reduced number of file descriptors for early detection of FD leaks
+      stageName: 'XGBoost Stress tests', target: 'test-pyunit-xgboost-stress', pythonVersion: '3.5', timeoutValue: 40,
+      component: pipelineContext.getBuildConfig().COMPONENT_PY, customDockerArgs: [ '--ulimit nofile=100:100' ]
     ]
   ]
 
+  def supportedHadoopDists = pipelineContext.getBuildConfig().getSupportedHadoopDistributions()
   def HADOOP_STAGES = []
-  for (distribution in pipelineContext.getBuildConfig().getSupportedHadoopDistributions()) {
+  for (distribution in supportedHadoopDists) {
+    def target
+    def ldapConfigPath
+    if (distribution.name == 'cdh' && distribution.version.startsWith('6.')) {
+      target = 'test-hadoop-3-smoke'
+      ldapConfigPath = 'scripts/jenkins/config/ldap-jetty-9.txt'
+    } else if (distribution.name == 'hdp' && distribution.version.startsWith('3.')) {
+      target = 'test-hadoop-3-smoke'
+      ldapConfigPath = 'scripts/jenkins/config/ldap-jetty-9.txt'
+    } else {
+      target = 'test-hadoop-2-smoke'
+      ldapConfigPath = 'scripts/jenkins/config/ldap-jetty-8.txt'
+    }
+
     def stageTemplate = [
-      target: 'test-hadoop-smoke', timeoutValue: 25, component: pipelineContext.getBuildConfig().COMPONENT_ANY,
-      additionalTestPackages: [pipelineContext.getBuildConfig().COMPONENT_HADOOP, pipelineContext.getBuildConfig().COMPONENT_PY],
+      target: target, timeoutValue: 45,
+      component: pipelineContext.getBuildConfig().COMPONENT_ANY,
+      additionalTestPackages: [
+              pipelineContext.getBuildConfig().COMPONENT_HADOOP,
+              pipelineContext.getBuildConfig().COMPONENT_PY,
+              pipelineContext.getBuildConfig().COMPONENT_R
+      ],
       customData: [
         distribution: distribution.name,
         version: distribution.version,
-        ldapConfigPath: 'scripts/jenkins/ldap-conf.txt'
+        commandFactory: 'h2o-3/scripts/jenkins/groovy/hadoopCommands.groovy',
+        ldapConfigPath: ldapConfigPath,
+        kerberosUserName: 'jenkins@H2O.AI',
+        kerberosPrincipal: 'HTTP/localhost@H2O.AI',
+        kerberosConfigPath: 'scripts/jenkins/config/kerberos.conf',
+        kerberosPropertiesPath: 'scripts/jenkins/config/kerberos.properties',
       ], pythonVersion: '2.7', nodeLabel: 'docker && micro',
       customDockerArgs: [ '--privileged' ],
       executionScript: 'h2o-3/scripts/jenkins/groovy/hadoopStage.groovy'
@@ -337,14 +385,68 @@ def call(final pipelineContext) {
     onHadoopStage.customData.mode = 'ON_HADOOP'
     onHadoopStage.image = pipelineContext.getBuildConfig().getSmokeHadoopImage(onHadoopStage.customData.distribution, onHadoopStage.customData.version, false)
 
-    def withKRBStage = evaluate(stageTemplate.inspect())
-    withKRBStage.stageName = "${distribution.name.toUpperCase()} ${distribution.version} - KRB"
-    withKRBStage.customData.mode = 'WITH_KRB'
-    withKRBStage.image = pipelineContext.getBuildConfig().getSmokeHadoopImage(withKRBStage.customData.distribution, withKRBStage.customData.version, true)
-
     HADOOP_STAGES += standaloneStage
     HADOOP_STAGES += onHadoopStage
-    HADOOP_STAGES += withKRBStage
+  }
+
+  def KERBEROS_STAGES = []
+  def distributionsToTest = [
+          [ name: "cdh", version: "5.10" ], // hdp2/hive1
+          [ name: "cdh", version: "6.1"  ], // hdp3/hive2
+          [ name: "hdp", version: "2.6"  ], // hdp2/hive2
+          [ name: "hdp", version: "3.1"  ]  // hdp3/hive3 - JDBC Only
+  ]
+  // check our config is still valid
+  for (distribution in distributionsToTest) {
+    def distSupported = false
+    for (supportedDist in supportedHadoopDists) {
+      if (supportedDist == distribution) {
+        distSupported = true
+      }
+    }
+    if (!distSupported) {
+      throw new IllegalArgumentException("Distribution ${distribution} is no longer supported. Update pipeline config.")
+    }
+    def target
+    if ((distribution.name == 'cdh' && distribution.version.startsWith('6.')) ||
+            (distribution.name == 'hdp' && distribution.version.startsWith('3.'))){
+      target = 'test-kerberos-hadoop-3'
+    } else {
+      target = 'test-kerberos-hadoop-2'
+    }
+
+    def stageTemplate = [
+            target: target, timeoutValue: 45,
+            component: pipelineContext.getBuildConfig().COMPONENT_ANY,
+            additionalTestPackages: [
+                    pipelineContext.getBuildConfig().COMPONENT_HADOOP,
+                    pipelineContext.getBuildConfig().COMPONENT_PY,
+                    pipelineContext.getBuildConfig().COMPONENT_R
+            ],
+            customData: [
+                    distribution: distribution.name,
+                    version: distribution.version,
+                    commandFactory: 'h2o-3/scripts/jenkins/groovy/kerberosCommands.groovy',
+                    kerberosUserName: 'jenkins@H2O.AI',
+                    kerberosPrincipal: 'HTTP/localhost@H2O.AI',
+                    kerberosConfigPath: 'scripts/jenkins/config/kerberos.conf',
+                    kerberosPropertiesPath: 'scripts/jenkins/config/kerberos.properties',
+            ], pythonVersion: '2.7', nodeLabel: 'docker && micro',
+            customDockerArgs: [ '--privileged' ],
+            executionScript: 'h2o-3/scripts/jenkins/groovy/hadoopStage.groovy'
+    ]
+    def standaloneStage = evaluate(stageTemplate.inspect())
+    standaloneStage.stageName = "${distribution.name.toUpperCase()} ${distribution.version} - STANDALONE"
+    standaloneStage.customData.mode = 'STANDALONE'
+    standaloneStage.image = pipelineContext.getBuildConfig().getSmokeHadoopImage(standaloneStage.customData.distribution, standaloneStage.customData.version, true)
+
+    def onHadoopStage = evaluate(stageTemplate.inspect())
+    onHadoopStage.stageName = "${distribution.name.toUpperCase()} ${distribution.version} - HADOOP"
+    onHadoopStage.customData.mode = 'ON_HADOOP'
+    onHadoopStage.image = pipelineContext.getBuildConfig().getSmokeHadoopImage(onHadoopStage.customData.distribution, onHadoopStage.customData.version, true)
+
+    KERBEROS_STAGES += standaloneStage
+    KERBEROS_STAGES += onHadoopStage
   }
 
   def XGB_STAGES = []
@@ -417,6 +519,8 @@ def call(final pipelineContext) {
     executeInParallel(BENCHMARK_STAGES, pipelineContext)
   } else if (modeCode == MODE_HADOOP_CODE) {
     executeInParallel(HADOOP_STAGES, pipelineContext)
+  } else if (modeCode == MODE_KERBEROS_CODE) {
+    executeInParallel(KERBEROS_STAGES, pipelineContext)
   } else if (modeCode == MODE_XGB_CODE) {
     executeInParallel(XGB_STAGES, pipelineContext)
   } else if (modeCode == MODE_COVERAGE_CODE) {
@@ -424,7 +528,6 @@ def call(final pipelineContext) {
   } else if (modeCode == MODE_SINGLE_TEST_CODE) {
     executeInParallel(SINGLE_TEST_STAGES, pipelineContext)
   } else {
-    executeInParallel(SMOKE_STAGES, pipelineContext)
     def jobs = PR_STAGES
     if (modeCode >= MODE_MASTER_CODE) {
       jobs += MASTER_STAGES
@@ -432,7 +535,13 @@ def call(final pipelineContext) {
     if (modeCode >= MODE_NIGHTLY_CODE) {
       jobs += NIGHTLY_STAGES
     }
-    executeInParallel(jobs, pipelineContext)
+    if (modeCode >= MODE_NIGHTLY_CODE) {
+      // in Nightly mode execute all jobs regardless whether smoke tests fail 
+      executeInParallel(SMOKE_STAGES + jobs, pipelineContext)
+    } else {
+      executeInParallel(SMOKE_STAGES, pipelineContext)
+      executeInParallel(jobs, pipelineContext)
+    }
   }
 }
 
@@ -461,6 +570,7 @@ private void executeInParallel(final jobs, final pipelineContext) {
           archiveFiles = c['archiveFiles']
           activatePythonEnv = c['activatePythonEnv']
 	      customDockerArgs = c['customDockerArgs']
+          imageSpecifier = c['imageSpecifier']
         }
       }
     ]
@@ -524,14 +634,13 @@ private void invokeStage(final pipelineContext, final body) {
         } else {
           boolean healthCheckPassed = false
           int attempt = 0
-          String nodeLabel = config.nodeLabel
           try {
             while (!healthCheckPassed) {
               attempt += 1
               if (attempt > HEALTH_CHECK_RETRIES) {
                 error "Too many attempts to pass initial health check"
               }
-              nodeLabel = pipelineContext.getHealthChecker().getHealthyNodesLabel(config.nodeLabel)
+              String nodeLabel = pipelineContext.getHealthChecker().getHealthyNodesLabel(config.nodeLabel)
               echo "######### NodeLabel: ${nodeLabel} #########"
               node(nodeLabel) {
                 echo "###### Unstash scripts. ######"

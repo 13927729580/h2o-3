@@ -24,7 +24,7 @@ if (inherits(try(getRefClass("H2OConnectionMutableState"), silent = TRUE), "try-
 #'
 #' The H2OConnectionMutableState class
 #'
-#' This class represents the mutable aspects of a connection to an H2O cloud.
+#' This class represents the mutable aspects of a connection to an H2O cluster.
 #'
 #' @name H2OConnectionMutableState
 #' @slot session_id A \code{character} string specifying the H2O session identifier.
@@ -43,7 +43,7 @@ setRefClass("H2OConnectionMutableState",
 #'
 #' The H2OConnection class.
 #'
-#' This class represents a connection to an H2O cloud.
+#' This class represents a connection to an H2O cluster.
 #'
 #' Because H2O is not a master-slave architecture, there is no restriction on which H2O node
 #' is used to establish the connection between R (the client) and H2O (the server).
@@ -52,10 +52,10 @@ setRefClass("H2OConnectionMutableState",
 #' the `ip` and `port` of the machine running an instance to connect with. The default behavior
 #' is to connect with a local instance of H2O at port 54321, or to boot a new local instance if one
 #' is not found at port 54321.
-#' @slot ip A \code{character} string specifying the IP address of the H2O cloud.
-#' @slot port A \code{numeric} value specifying the port number of the H2O cloud.
-#' @slot name A \code{character} value specifying the cloud name of the H2O cloud.
-#' @slot proxy A \code{character} specifying the proxy path of the H2O cloud.
+#' @slot ip A \code{character} string specifying the IP address of the H2O cluster.
+#' @slot port A \code{numeric} value specifying the port number of the H2O cluster.
+#' @slot name A \code{character} value specifying the name of the H2O cluster.
+#' @slot proxy A \code{character} specifying the proxy path of the H2O cluster.
 #' @slot https Set this to TRUE to use https instead of http.
 #' @slot insecure Set this to TRUE to disable SSL certificate checking.
 #' @slot username Username to login with.
@@ -97,15 +97,34 @@ setMethod("show", "H2OConnection", function(object) {
   cat("Key Count :", object@mutable$key_count,  "\n")
 })
 
+#' Virtual Keyed class
+#'
+#' Base class for all objects having a persistent representation on backend.
+#'
+#' @export
+setClass("Keyed", contains="VIRTUAL")
+#' Method on \code{Keyed} objects allowing to obtain their key.
+#'
+#' @param object A \code{Keyed} object
+#' @return the string key holding the persistent object.
+#' @export
+setGeneric("h2o.keyof", function(object) {
+  standardGeneric("h2o.keyof")
+})
+#' @rdname h2o.keyof
+setMethod("h2o.keyof", signature(object = "Keyed"), function(object) {
+  stop("`keyof` not implemented for this object type.")
+})
+
 #'
 #' The H2OModel object.
 #'
 #' This virtual class represents a model built by H2O.
 #'
-#' This object has slots for the key, which is a character string that points to the model key existing in the H2O cloud,
+#' This object has slots for the key, which is a character string that points to the model key existing in the H2O cluster,
 #' the data used to build the model (an object of class H2OFrame).
 #'
-#' @slot model_id A \code{character} string specifying the key for the model fit in the H2O cloud's key-value store.
+#' @slot model_id A \code{character} string specifying the key for the model fit in the H2O cluster's key-value store.
 #' @slot algorithm A \code{character} string specifying the algorithm that were used to fit the model.
 #' @slot parameters A \code{list} containing the parameter settings that were used to fit the model that differ from the defaults.
 #' @slot allparameters A \code{list} containg all parameters used to fit the model.
@@ -117,12 +136,15 @@ setMethod("show", "H2OConnection", function(object) {
 setClass("H2OModel",
          representation(model_id="character", algorithm="character", parameters="list", allparameters="list", have_pojo="logical", have_mojo="logical", model="list"),
          prototype(model_id=NA_character_),
-         contains="VIRTUAL")
+         contains=c("Keyed","VIRTUAL"))
 
 # TODO: make a more model-specific constructor
 .newH2OModel <- function(Class, model_id, ...) {
   new(Class, model_id=model_id, ...)
 }
+
+#' @rdname h2o.keyof
+setMethod("h2o.keyof", signature("H2OModel"), function(object) object@model_id)
 
 #' @rdname H2OModel-class
 #' @param object an \code{H2OModel} object.
@@ -141,7 +163,12 @@ setMethod("show", "H2OModel", function(object) {
 
   # if glm, print the coefficeints
   cat("\n")
-  if( !is.null(m$coefficients_table) ) print(m$coefficients_table)
+  if( !is.null(m$coefficients_table) ){
+    print(m$coefficients_table)
+  } else if(o@algorithm == 'generic' && !is.null(m$training_metrics@metrics$`coefficients_table`)){
+    # In case of generic model, coefficient_table is part of the metrics object
+    print(m$training_metrics@metrics$`coefficients_table`)
+  }
 
   # metrics
   cat("\n")
@@ -225,7 +252,7 @@ setMethod("summary", "H2OModel", function(object, ...) {
   if( !is.null(tm$Gini)                                            )  cat("\nGini: (Extract with `h2o.gini`)", tm$Gini)
   if( !is.null(tm$null_deviance)                                   )  cat("\nNull Deviance: (Extract with `h2o.nulldeviance`)", tm$null_deviance)
   if( !is.null(tm$residual_deviance)                               )  cat("\nResidual Deviance: (Extract with `h2o.residual_deviance`)", tm$residual_deviance)
-  if(exists(o@algorithm) && o@algorithm == "glm") {
+  if(!is.null(o@algorithm) && o@algorithm %in% c("glm","gbm","drf","xgboost","generic")) {
     if( !is.null(tm$r2) && !is.na(tm$r2)                           )  cat("\nR^2: (Extract with `h2o.r2`)", tm$r2)
   }
   if( !is.null(tm$AIC)                                             )  cat("\nAIC: (Extract with `h2o.aic`)", tm$AIC)
@@ -265,10 +292,10 @@ setClass("H2ORegressionModel",  contains="H2OModel")
 #'
 #' This virtual class represents a clustering model built by H2O.
 #'
-#' This object has slots for the key, which is a character string that points to the model key existing in the H2O cloud,
+#' This object has slots for the key, which is a character string that points to the model key existing in the H2O cluster,
 #' the data used to build the model (an object of class H2OFrame).
 #'
-#' @slot model_id A \code{character} string specifying the key for the model fit in the H2O cloud's key-value store.
+#' @slot model_id A \code{character} string specifying the key for the model fit in the H2O cluster's key-value store.
 #' @slot algorithm A \code{character} string specifying the algorithm that was used to fit the model.
 #' @slot parameters A \code{list} containing the parameter settings that were used to fit the model that differ from the defaults.
 #' @slot allparameters A \code{list} containing all parameters used to fit the model.
@@ -294,6 +321,9 @@ setClass("H2OWordEmbeddingModel", contains="H2OModel")
 #' @rdname H2OModel-class
 #' @export
 setClass("H2OAnomalyDetectionModel", contains="H2OModel")
+#' @rdname H2OModel-class
+#' @export
+setClass("H2OTargetEncoderModel", contains="H2OModel")
 
 #'
 #' The H2OCoxPHModel object.
@@ -562,7 +592,7 @@ setMethod("show", "H2OBinomialMetrics", function(object) {
     cat("AUC:  ", object@metrics$AUC, "\n", sep="")
     cat("pr_auc:  ", object@metrics$pr_auc, "\n", sep="")
     cat("Gini:  ", object@metrics$Gini, "\n", sep="")
-    if(exists(object@algorithm) && object@algorithm == "glm") {
+    if(!is.null(object@algorithm) && object@algorithm %in% c("glm","gbm","drf","xgboost","generic")) {
 
       if (!is.null(object@metrics$r2) && !is.na(object@metrics$r2)) cat("R^2:  ", object@metrics$r2, "\n", sep="")
       if (!is.null(object@metrics$null_deviance0)) cat("Null Deviance:  ", object@metrics$null_deviance,"\n", sep="")
@@ -633,7 +663,7 @@ setMethod("show", "H2ORegressionMetrics", function(object) {
   cat("MAE:  ", object@metrics$mae, "\n", sep="")
   cat("RMSLE:  ", object@metrics$rmsle, "\n", sep="")
   cat("Mean Residual Deviance :  ", h2o.mean_residual_deviance(object), "\n", sep="")
-  if(exists(object@algorithm) && object@algorithm == "glm") {
+  if(!is.null(object@algorithm) && object@algorithm %in% c("glm","gbm","drf","xgboost","generic")) {
     if (!is.na(h2o.r2(object))) cat("R^2 :  ", h2o.r2(object), "\n", sep="")
     null_dev <- h2o.null_deviance(object)
     res_dev  <- h2o.residual_deviance(object)
@@ -710,6 +740,10 @@ setClass("H2OCoxPHMetrics", contains="H2OModelMetrics")
 #' @rdname H2OModelMetrics-class
 #' @export
 setClass("H2OAnomalyDetectionMetrics", contains="H2OModelMetrics")
+
+#' @rdname H2OModelMetrics-class
+#' @export
+setClass("H2OTargetEncoderMetrics", contains="H2OModelMetrics")
 
 #' H2O Future Model
 #'
@@ -815,7 +849,9 @@ setMethod("summary", "H2OGrid",
 #' This class represents an H2OFrame object
 #'
 #' @export
-setClass("H2OFrame", contains = "environment")
+setClass("H2OFrame", contains = c("Keyed", "environment"))
+#' @rdname h2o.keyof
+setMethod("h2o.keyof", signature("H2OFrame"), function(object) attr(object, "id"))
 
 #'
 #' The H2OAutoML class
@@ -825,4 +861,10 @@ setClass("H2OFrame", contains = "environment")
 #' @export
 setClass("H2OAutoML", slots = c(project_name = "character",
                                 leader = "H2OModel",
-                                leaderboard = "H2OFrame"))
+                                leaderboard = "H2OFrame",
+                                event_log = "H2OFrame",
+                                modeling_steps = "list",
+                                training_info = "list"),
+                      contains = "Keyed")
+#' @rdname h2o.keyof
+setMethod("h2o.keyof", signature("H2OAutoML"), function(object) object@project_name)

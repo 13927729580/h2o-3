@@ -3,7 +3,7 @@
 ``stopping_metric``
 -------------------
 
-- Available in: GBM, DRF, Deep Learning, AutoML, XGBoost
+- Available in: GBM, DRF, Deep Learning, AutoML, XGBoost, Isolation Forest
 - Hyperparameter: yes
 
 Description
@@ -19,7 +19,8 @@ then the model will stop training after reaching three scoring events in a row i
 
 Available options for ``stopping_metric`` include the following:
 
-- ``AUTO``: This defaults to ``logloss`` for classification, ``deviance`` (mean residual deviance) for regression
+- ``AUTO``: This defaults to ``logloss`` for classification, ``deviance`` (mean residual deviance) for regression, and ``anomaly_score`` for Isolation Forest.
+- ``anomaly_score`` (for Isolation Forest only)
 - ``deviance``
 - ``logloss``
 - ``MSE``
@@ -29,7 +30,10 @@ Available options for ``stopping_metric`` include the following:
 - ``AUC``
 - ``lift_top_group``
 - ``misclassification``
+- ``aucpr``
 - ``mean_per_class_error``
+- ``custom`` (for custom metric functions where "less is better". It is expected that the lower bound is 0.) Note that this is currently only supported in the Python client for GBM and DRF. More information available in Python example below and `here <https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/dev/custom_functions.md>`__.
+- ``custom_increasing`` (for custom metric functions where "more is better".) Note that this is currently only supported in the Python client for GBM and DRF. More information available in Python example below and `here <https://github.com/h2oai/h2o-3/blob/master/h2o-docs/src/dev/custom_functions.md>`__.
 
 **Note**: ``stopping_rounds`` must be enabled for ``stopping_metric`` or ``stopping_tolerance`` to work.
 
@@ -123,3 +127,34 @@ Example
 	# print the auc for the validation data
 	airlines_gbm.auc(valid=True)
 
+	# Example using a custom metric
+	# Create a custom RMSE Model metric and save as mm_rmse.py
+	# Note that this references a java class java.lang.Math
+	class CustomRmseFunc:
+	def map(self, pred, act, w, o, model):
+	    idx = int(act[0])
+	    err = 1 - pred[idx + 1] if idx + 1 < len(pred) else 1
+	    return [err * err, 1]
+
+	def reduce(self, l, r):
+	    return [l[0] + r[0], l[1] + r[1]]
+
+	def metric(self, l):
+	    # Use Java API directly
+	    import java.lang.Math as math
+	    return math.sqrt(l[0] / l[1])
+
+	# Upload the custom metric
+	custom_mm_func = h2o.upload_custom_metric(CustomRmseFunc, 
+	                                          func_name="rmse", 
+	                                          func_file="mm_rmse.py")
+
+	# Train the model
+	model = H2OGradientBoostingEstimator(ntrees=3, 
+	                                     max_depth=5,
+	                                     score_each_iteration=True,
+	                                     custom_metric_func=custom_mm_func,
+	                                     stopping_metric="custom",
+	                                     stopping_tolerance=0.1,
+	                                     stopping_rounds=3)
+	model.train(x=predictors, y=response, training_frame train, validation_frame = valid)

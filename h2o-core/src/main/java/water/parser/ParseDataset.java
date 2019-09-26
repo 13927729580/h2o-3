@@ -185,7 +185,7 @@ public final class ParseDataset {
 
   // Setup a private background parse job
   private ParseDataset(Key<Frame> dest) {
-    _job = new Job(dest,Frame.class.getName(), "Parse");
+    _job = new Job<>(dest, Frame.class.getName(), "Parse");
   }
 
   // -------------------------------
@@ -229,8 +229,8 @@ public final class ParseDataset {
       if (mfpt != null) mfpt.onExceptionCleanup(fs);
       // Assume the input is corrupt - or already partially deleted after
       // parsing.  Nuke it all - no partial Vecs lying around.
-      for (Key k : _keys) Keyed.remove(k, fs);
-      Keyed.remove(_pds._job._result,fs);
+      for (Key k : _keys) Keyed.remove(k, fs, true);
+      Keyed.remove(_pds._job._result, fs, true);
       fs.blockForPending();
     }
   }
@@ -256,10 +256,10 @@ public final class ParseDataset {
     MultiFileParseTask mfpt = pds._mfpt = new MultiFileParseTask(vg,setup,job._key,fkeys,deleteOnDone);
     mfpt.doAll(fkeys);
     Log.trace("Done ingesting files.");
+    
     if( job.stop_requested() ) return pds;
 
-    final AppendableVec [] avs = mfpt.vecs(); // with skipped_columns excluded
-    Frame fr = null;
+    final AppendableVec[] avs = mfpt.vecs();
     // Calculate categorical domain
     // Filter down to columns with some categoricals
     int n = 0;
@@ -268,10 +268,12 @@ public final class ParseDataset {
 
     String[] parse_column_names;
     byte[] parse_column_types;
-    if (setup._column_names == null)
-      setup._column_names = getColumnNames(setup._column_types.length, null);
+    int colNumbers = setup._column_types==null?setup._number_columns:setup._column_types.length;;
+    if (setup._column_names == null) {
+      setup._column_names = getColumnNames(colNumbers, null);
+    }
 
-    boolean typesSameParseColumns = setup._column_types.length==parseCols;
+    boolean typesSameParseColumns = colNumbers==parseCols;
     boolean namesSameparseColumns = setup._column_names.length==parseCols;
 
     if (sameParseColumns) {
@@ -298,6 +300,8 @@ public final class ParseDataset {
         ecols2[n++] = i;
     }
     final int[] ecols = Arrays.copyOf(ecols2, n); // skipped columns are excluded already
+    Frame fr;
+    ParseFinalizer finalizer = ParseFinalizer.get(setup);
     // If we have any, go gather unified categorical domains
     if( n > 0 ) {
       if (!setup.getParseType().isDomainProvided) { // Domains are not provided via setup we need to collect them
@@ -329,8 +333,9 @@ public final class ParseDataset {
 
       job.update(0, "Compressing data.");
 
-      fr = new Frame(job._result, setup._column_names, AppendableVec.closeAll(avs));
+      fr = finalizer.finalize(job, AppendableVec.closeAll(avs), setup, mfpt._fileChunkOffsets);
       fr.update(job);
+
       Log.trace("Done compressing data.");
       if (!setup.getParseType().isDomainProvided) {
         // Update categoricals to the globally agreed numbering
@@ -357,7 +362,7 @@ public final class ParseDataset {
       }
     } else {                    // No categoricals case
       job.update(0,"Compressing data.");
-      fr = new Frame(job._result, setup._column_names,AppendableVec.closeAll(avs));
+      fr = finalizer.finalize(job, AppendableVec.closeAll(avs), setup, mfpt._fileChunkOffsets);
       Log.trace("Done closing all Vecs.");
     }
     // Check for job cancellation
@@ -645,7 +650,8 @@ public final class ParseDataset {
     private ParseWriter.ParseErr[] _errors = new ParseWriter.ParseErr[0];
 
     MultiFileParseTask(VectorGroup vg,  ParseSetup setup, Key<Job> jobKey, Key[] fkeys, boolean deleteOnDone ) {
-      _vg = vg; _parseSetup = setup;
+      _vg = vg; 
+      _parseSetup = setup;
       _vecIdStart = _vg.reserveKeys(_reservedKeys = _parseSetup._parse_type.equals(SVMLight_INFO) ? 100000000 : setup._number_columns);
       _deleteOnDone = deleteOnDone;
       _jobKey = jobKey;
@@ -742,7 +748,7 @@ public final class ParseDataset {
         if(_deleteOnDone) vec.remove();
       } else {
         Frame fr = (Frame)ice;
-        if(_deleteOnDone) fr.delete(_jobKey,new Futures()).blockForPending();
+        if(_deleteOnDone) fr.delete(_jobKey,new Futures(), true).blockForPending();
         else if( fr._key != null ) fr.unlock(_jobKey);
       }
     }
@@ -1030,7 +1036,7 @@ public final class ParseDataset {
           if( _outerMFPT._deleteOnDone) ((ByteVec)ice).remove();
         } else {
           Frame fr = (Frame)ice;
-          if( _outerMFPT._deleteOnDone) fr.delete(_outerMFPT._jobKey,new Futures()).blockForPending();
+          if( _outerMFPT._deleteOnDone) fr.delete(_outerMFPT._jobKey,new Futures(), true).blockForPending();
           else if( fr._key != null ) fr.unlock(_outerMFPT._jobKey);
         }
       }
@@ -1042,7 +1048,7 @@ public final class ParseDataset {
       int ncols = _parseSetup._number_columns;
       for( int i = 0; i < ncols; ++i ) {
         Key vkey = _vg.vecKey(_vecIdStart + i);
-        Keyed.remove(vkey,fs);
+        Keyed.remove(vkey, fs, true);
         for( int c = 0; c < nchunks; ++c )
           DKV.remove(Vec.chunkKey(vkey,c),fs);
       }

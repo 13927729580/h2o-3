@@ -1,6 +1,7 @@
 package hex.api;
 
 import hex.ModelBuilder;
+import hex.psvm.PSVM;
 import hex.tree.TreeHandler;
 import water.api.AlgoAbstractRegister;
 import water.api.RestApiContext;
@@ -27,6 +28,8 @@ public class RegisterAlgos extends AlgoAbstractRegister {
             new hex.word2vec    .Word2Vec    (true),
             new hex.ensemble    .StackedEnsemble(true),
             new hex.coxph       .CoxPH       (true),
+            new hex.generic     .Generic     (true),
+            new PSVM(true)        
     };
 
     // "Word2Vec", "Example", "Grep"
@@ -62,6 +65,7 @@ public class RegisterAlgos extends AlgoAbstractRegister {
             "Test only" );
 
     context.registerEndpoint("get_tree", "GET /3/Tree", TreeHandler.class, "getTree", "Obtain a traverseable representation of a specific tree");
+    
   }
 
   @Override

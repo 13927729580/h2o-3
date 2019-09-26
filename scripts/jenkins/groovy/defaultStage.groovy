@@ -20,10 +20,12 @@ def call(final pipelineContext, final stageConfig) {
 
         if (stageConfig.component == pipelineContext.getBuildConfig().COMPONENT_PY || stageConfig.additionalTestPackages.contains(pipelineContext.getBuildConfig().COMPONENT_PY)) {
             installPythonPackage(h2oFolder)
-            dir(stageConfig.stageDir) {
-                pipelineContext.getUtils().pullXGBWheels(this)
+            if (stageConfig.pythonVersion.startsWith("3.")) {
+                dir(stageConfig.stageDir) {
+                    pipelineContext.getUtils().pullXGBWheels(this)
+                }
+                installXGBWheel(h2oFolder)
             }
-            installXGBWheel(pipelineContext.getBuildConfig().getCurrentXGBVersion(), h2oFolder)
         }
 
         if (stageConfig.installRPackage && (stageConfig.component == pipelineContext.getBuildConfig().COMPONENT_R || stageConfig.additionalTestPackages.contains(pipelineContext.getBuildConfig().COMPONENT_R))) {
@@ -64,12 +66,12 @@ def installRPackage(String h2o3dir) {
     """
 }
 
-def installXGBWheel(final String xgbVersion, final String h2o3dir) {
+def installXGBWheel(final String h2o3dir) {
     sh """
         echo "Activating Python ${env.PYTHON_VERSION}"
         . /envs/h2o_env_python${env.PYTHON_VERSION}/bin/activate
 
-        pip install ${h2o3dir}/xgb-whls/xgboost_ompv4-${xgbVersion}-cp${env.PYTHON_VERSION.replaceAll('\\.','')}-*-linux_x86_64.whl
+        pip install ${h2o3dir}/xgb-whls/xgboost_ompv4-*-cp${env.PYTHON_VERSION.replaceAll('\\.','')}-*-linux_x86_64.whl
     """
 }
 

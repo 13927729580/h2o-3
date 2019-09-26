@@ -7,6 +7,12 @@ Modeling In H2O
 Supervised
 ++++++++++
 
+:mod:`H2OCoxProportionalHazardsEstimator`
+-----------------------------------------
+.. autoclass:: h2o.estimators.coxph.H2OCoxProportionalHazardsEstimator
+    :show-inheritance:
+    :members:
+
 :mod:`H2ODeepLearningEstimator`
 -------------------------------
 .. autoclass:: h2o.estimators.deeplearning.H2ODeepLearningEstimator
@@ -37,6 +43,12 @@ Supervised
     :show-inheritance:
     :members:
 
+:mod:`H2OSupportVectorMachineEstimator`
+---------------------------------------
+.. autoclass:: h2o.estimators.psvm.H2OSupportVectorMachineEstimator
+    :show-inheritance:
+    :members:
+
 :mod:`H2ORandomForestEstimator`
 -------------------------------
 .. autoclass:: h2o.estimators.random_forest.H2ORandomForestEstimator
@@ -46,6 +58,12 @@ Supervised
 :mod:`H2OStackedEnsembleEstimator`
 ----------------------------------
 .. autoclass:: h2o.estimators.stackedensemble.H2OStackedEnsembleEstimator
+    :show-inheritance:
+    :members:
+
+:mod:`H2OTargetEncoderEstimator`
+--------------------------------
+.. autoclass:: h2o.estimators.targetencoder.H2OTargetEncoderEstimator
     :show-inheritance:
     :members:
 
@@ -68,6 +86,12 @@ Unsupervised
 :mod:`H2OAutoEncoderEstimator`
 ------------------------------
 .. autoclass:: h2o.estimators.deeplearning.H2OAutoEncoderEstimator
+    :show-inheritance:
+    :members:
+
+:mod:`H2OGenericEstimator`
+--------------------------
+.. autoclass:: h2o.estimators.generic.H2OGenericEstimator
     :show-inheritance:
     :members:
 

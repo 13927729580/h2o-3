@@ -58,7 +58,7 @@ Example
 
   R is connected to the H2O cluster: 
       H2O cluster uptime:         2 seconds 812 milliseconds 
-      H2O cluster version:        3.20.0.1 
+      H2O cluster version:        3.22.1.2 
       H2O cluster version age:    9 days  
       H2O cluster name:           H2O_started_from_R_techwriter_awt197 
       H2O cluster total nodes:    1 
@@ -81,6 +81,7 @@ Use the ``h2o.init()`` function to initialize H2O. This function accepts the fol
 - ``url``: Full URL of the server to connect to. (This can be used instead of ``ip`` + ``port`` + ``https``.)
 - ``ip``: The ip address (or host name) of the server where H2O is running.
 - ``port``: Port number that H2O service is listening to.
+- ``name``: Cluster name. If None while connecting to an existing cluster it will not check the cluster name. If set then will connect only if the target cluster name matches. If no instance is found and decides to start a local one then this will be used as the cluster name or a random one will be generated if set to None.
 - ``https``: Set to True to connect via https:// instead of http://.
 - ``insecure``: When using https, setting this to True will disable SSL certificates verification.
 - ``username``: The username to log in with when using basic authentication.
@@ -90,10 +91,17 @@ Use the ``h2o.init()`` function to initialize H2O. This function accepts the fol
 - ``start_h2o``: If False, do not attempt to start an H2O server when a connection to an existing one failed.
 - ``nthreads``: "Number of threads" option when launching a new H2O server.
 - ``ice_root``: The directory for temporary files for the new H2O server.
+- ``log_dir``: Directory for H2O logs to be stored if a new instance is started. Ignored if connecting to an existing node.
+- ``log_level``: The logger level for H2O if a new instance is started. One of TRACE,DEBUG,INFO,WARN,ERRR,FATA. Default is INFO. Ignored if connecting to an existing node.
 - ``enable_assertions``: Enable assertions in Java for the new H2O server.
 - ``max_mem_size``: Maximum memory to use for the new H2O server. Integer input will be evaluated as gigabytes.  Other units can be specified by passing in a string (e.g. "160M" for 160 megabytes).
 - ``min_mem_size``: Minimum memory to use for the new H2O server. Integer input will be evaluated as gigabytes.  Other units can be specified by passing in a string (e.g. "160M" for 160 megabytes).
 - ``strict_version_check``: If True, an error will be raised if the client and server versions don't match.
+- ``ignore_config``: Indicates whether a processing of a .h2oconfig file should be conducted or not. Default value is False.
+- ``extra_classpath``: List of paths to libraries that should be included on the Java classpath when starting H2O from Python.
+- ``kwargs``: (all other deprecated attributes)
+- ``jvm_custom_args``: Customer, user-defined argument’s for the JVM H2O is instantiated in. Ignored if there is an instance of H2O already running and the client connects to it.
+- ``bind_to_localhost``: A flag indicating whether access to the H2O instance should be restricted to the local machine (default) or if it can be reached from other computers on the network.
 
 Example
 ~~~~~~~
@@ -115,7 +123,7 @@ Example
   Connecting to H2O server at http://127.0.0.1:54323... successful.
   --------------------------  ---------------------------------
   H2O cluster uptime:         02 secs
-  H2O cluster version:        3.20.0.1
+  H2O cluster version:        3.22.1.2
   H2O cluster version age:    9 days
   H2O cluster name:           H2O_from_python_techwriter_pu6lbs
   H2O cluster total nodes:    1
@@ -212,7 +220,7 @@ H2O.
 When you launch from the command line, you can include
 additional instructions to H2O 3.0, such as how many nodes to launch,
 how much memory to allocate for each node, assign names to the nodes in
-the cloud, and more.
+the cluster, and more.
 
     **Note**: H2O requires some space in the ``/tmp`` directory to
     launch. If you cannot launch H2O, try freeing up some space in the
@@ -244,8 +252,8 @@ H2O Options
 
 -	``-h`` or ``-help``: Display this information in the command line output.
 - ``-version``: Specify to print version information and exit.
--	``-name <H2OCloudName>``: Assign a name to the H2O instance in the cloud (where ``<H2OCloudName>`` is the name of the cloud). Nodes with the same cloud name will form an H2O cloud (also known as an H2O cluster).
--	``-flatfile <FileName>``: Specify a flatfile of IP address for faster cloud formation (where ``<FileName>`` is the name of the flatfile).
+-	``-name <H2OClusterName>``: Assign a name to the H2O instance in the cluster (where ``<H2OClusterName>`` is the name of the cluster). Nodes with the same cluster name will form an H2O cluster (also known as an H2O cloud).
+-	``-flatfile <FileName>``: Specify a flatfile of IP address for faster cluster formation (where ``<FileName>`` is the name of the flatfile).
 -	``-ip <IPnodeAddress>``: Specify an IP for the machine other than the default ``localhost``, for example:
     
     - IPv4: ``-ip 178.16.2.223`` 
@@ -277,6 +285,7 @@ Authentication Options
 
 -  ``-jks <filename>``: Specify a Java keystore file.
 -  ``-jks_pass <password>``: Specify the Java keystore password.
+-  ``-jks_alias <alias>``: Optional, use if the keystore has multiple certificates and you want to use a specific one.
 -  ``-hash_login``: Specify to use Jetty HashLoginService. This defaults to False.
 -  ``-ldap_login``: Specify to use Jetty LdapLoginService. This defaults to False.
 -  ``-kerberos_login``: Specify to use Kerberos LoginService. This defaults to False.
@@ -311,19 +320,19 @@ By default, H2O selects the IP and PORT for internal communication automatically
   - ``-baseport`` 
 
 
-Cloud Formation Behavior
-^^^^^^^^^^^^^^^^^^^^^^^^
+Cluster Formation Behavior
+^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-New H2O nodes join to form a cloud during launch. After a job has
-started on the cloud, it prevents new members from joining.
+New H2O nodes join to form a cluster during launch. After a job has
+started on the cluster, it prevents new members from joining.
 
--  To start an H2O node with 4GB of memory and a default cloud name:
+-  To start an H2O node with 4GB of memory and a default cluster name:
    ``java -Xmx4g -jar h2o.jar``
 
--  To start an H2O node with 6GB of memory and a specific cloud name:
-   ``java -Xmx6g -jar h2o.jar -name MyCloud``
+-  To start an H2O node with 6GB of memory and a specific cluster name:
+   ``java -Xmx6g -jar h2o.jar -name MyCluster``
 
--  To start an H2O cloud with three 2GB nodes using the default cloud
+-  To start an H2O cluster with three 2GB nodes using the default cluster
    names: ``java -Xmx2g -jar h2o.jar &   java -Xmx2g -jar h2o.jar &   java -Xmx2g -jar h2o.jar &``
 
 Wait for the ``INFO: Registered: # schemas in: #mS`` output before
@@ -341,8 +350,8 @@ H2O provides two modes for cluster creation:
 Multicast
 '''''''''
 
-In this mode, H2O is using IP multicast to announce existence of H2O nodes. Each node selects the same multicast group and port based on specified shared cloud name (see ``-name`` option). For example, for IPv4/PORT a generated multicast group is ``228.246.114.236:58614`` (for cloud name ``michal``), 
-for IPv6/PORT a generated multicast group is ``ff05:0:3ff6:72ec:0:0:3ff6:72ec:58614`` (for cloud name ``michal`` and link-local address which enforce link-local scope).
+In this mode, H2O is using IP multicast to announce existence of H2O nodes. Each node selects the same multicast group and port based on specified shared cluster name (see ``-name`` option). For example, for IPv4/PORT a generated multicast group is ``228.246.114.236:58614`` (for cluster name ``michal``), 
+for IPv6/PORT a generated multicast group is ``ff05:0:3ff6:72ec:0:0:3ff6:72ec:58614`` (for cluster name ``michal`` and link-local address which enforce link-local scope).
 
 For IPv6 the scope of multicast address is enforced by a selected node IP. For example, if IP the selection process selects link-local address, then the scope of multicast will be link-local. This can be modified by specifying JVM variable ``sys.ai.h2o.network.ipv6.scope`` which enforces addressing scope use in multicast group address (for example, ``-Dsys.ai.h2o.network.ipv6.scope=0x0005000000000000`` enforces the site local scope. For more details please consult the
 class ``water.util.NetworkUtils``).
@@ -402,3 +411,10 @@ On Spark
 --------
 
 Refer to the `Getting Started with Sparkling Water <welcome.html#getting-started-with-sparkling-water>`__ section for information on how to launch H2O on Spark. 
+
+Best Practices
+--------------
+
+- Use ``h2o.importFile`` instead of ``h2o.uploadFile`` if possible.
+- Set the correct cluster size for your given dataset size. The rule of thumb is to use at least 4 times the size of your data. For example, if the dataset is 10GB, you should allocate at least 40GB of memory.
+

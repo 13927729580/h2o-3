@@ -1,6 +1,10 @@
 package hex.genmodel.algos.glm;
 
+import com.google.gson.JsonObject;
 import hex.genmodel.ModelMojoReader;
+import hex.genmodel.attributes.ModelAttributesGLM;
+import hex.genmodel.attributes.ModelAttributes;
+import hex.genmodel.attributes.ModelJsonReader;
 
 import java.io.IOException;
 
@@ -36,6 +40,16 @@ public class GlmMojoReader extends ModelMojoReader<GlmMojoModelBase> {
   }
 
   @Override
+  protected ModelAttributes readModelSpecificAttributes() {
+    final JsonObject modelJson = ModelJsonReader.parseModelJson(_reader);
+    if(modelJson != null) {
+      return new ModelAttributesGLM(_model, modelJson);
+    } else {
+      return null;
+    }
+  }
+
+  @Override
   protected GlmMojoModelBase makeModel(String[] columns, String[][] domains, String responseColumn) {
     String family = readkv("family");
     if ("multinomial".equals(family))
@@ -44,6 +58,10 @@ public class GlmMojoReader extends ModelMojoReader<GlmMojoModelBase> {
       return new GlmOrdinalMojoModel(columns, domains, responseColumn);
     else
       return new GlmMojoModel(columns, domains, responseColumn);
+  }
+
+  @Override public String mojoVersion() {
+    return "1.00";
   }
 
 }

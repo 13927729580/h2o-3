@@ -19,14 +19,13 @@ class H2OWord2vecEstimator(H2OEstimator):
     """
 
     algo = "word2vec"
+    param_names = {"model_id", "training_frame", "min_word_freq", "word_model", "norm_model", "vec_size", "window_size",
+                   "sent_sample_rate", "init_learning_rate", "epochs", "pre_trained", "max_runtime_secs",
+                   "export_checkpoints_dir"}
 
     def __init__(self, **kwargs):
         super(H2OWord2vecEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "training_frame", "min_word_freq", "word_model", "norm_model", "vec_size",
-                      "window_size", "sent_sample_rate", "init_learning_rate", "epochs", "pre_trained",
-                      "max_runtime_secs", "export_checkpoints_dir"}
-        if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
                 self._id = pvalue
@@ -35,7 +34,7 @@ class H2OWord2vecEstimator(H2OEstimator):
                 setattr(self, pname, pvalue)
                 self._determine_vec_size();
                 setattr(self, 'vec_size', self.vec_size)
-            elif pname in names_list:
+            elif pname in self.param_names:
                 # Using setattr(...) will invoke type-checking of the arguments
                 setattr(self, pname, pvalue)
             else:
@@ -52,8 +51,7 @@ class H2OWord2vecEstimator(H2OEstimator):
 
     @training_frame.setter
     def training_frame(self, training_frame):
-        assert_is_type(training_frame, None, H2OFrame)
-        self._parms["training_frame"] = training_frame
+        self._parms["training_frame"] = H2OFrame._validate(training_frame, 'training_frame')
 
 
     @property
@@ -188,8 +186,7 @@ class H2OWord2vecEstimator(H2OEstimator):
 
     @pre_trained.setter
     def pre_trained(self, pre_trained):
-        assert_is_type(pre_trained, None, H2OFrame)
-        self._parms["pre_trained"] = pre_trained
+        self._parms["pre_trained"] = H2OFrame._validate(pre_trained, 'pre_trained')
 
 
     @property
@@ -220,7 +217,6 @@ class H2OWord2vecEstimator(H2OEstimator):
     def export_checkpoints_dir(self, export_checkpoints_dir):
         assert_is_type(export_checkpoints_dir, None, str)
         self._parms["export_checkpoints_dir"] = export_checkpoints_dir
-
 
 
     def _requires_training_frame(self):

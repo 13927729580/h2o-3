@@ -61,6 +61,9 @@ public class DataInfo extends Keyed<DataInfo> {
   public int[] catNAFill() {return _catNAFill;}
   public int catNAFill(int cid) {return _catNAFill[cid];}
 
+  public double[] numNAFill() {return _numNAFill; }
+  public double numNAFill(int nid) {return _numNAFill[nid];}
+  
   public void setCatNAFill(int[] catNAFill) {
     _catNAFill = catNAFill;
   }
@@ -111,6 +114,7 @@ public class DataInfo extends Keyed<DataInfo> {
   public int [] _catOffsets;   // offset column indices for the 1-hot expanded values (includes enum-enum interaction)
   public boolean [] _catMissing;  // bucket for missing levels
   private int [] _catNAFill;    // majority class of each categorical col (or last bucket if _catMissing[i] is true)
+  public double[] _numNAFill;
   public int [] _permutation; // permutation matrix mapping input col indices to adaptedFrame
   public double [] _normMul;  // scale the predictor column by this value
   public double [] _normSub;  // subtract from the predictor this value
@@ -158,6 +162,10 @@ public class DataInfo extends Keyed<DataInfo> {
     this(train,valid,nResponses,useAllFactorLevels,predictor_transform,response_transform,skipMissing,imputeMissing,missingBucket,weight,offset,fold,null);
   }
 
+  public DataInfo(Frame train, Frame valid, int nResponses, boolean useAllFactorLevels, TransformType predictor_transform, TransformType response_transform, boolean skipMissing, boolean imputeMissing, boolean missingBucket, boolean weight, boolean offset, boolean fold, Model.InteractionSpec interactions) {
+    this(train, valid, nResponses, useAllFactorLevels, predictor_transform, response_transform, skipMissing, imputeMissing, new MeanImputer(), missingBucket, weight, offset, fold, interactions);
+  }
+
   /**
    *
    * The train/valid Frame instances are sorted by categorical (themselves sorted by
@@ -178,7 +186,7 @@ public class DataInfo extends Keyed<DataInfo> {
    *    A. As a list of pairs of column indices.
    *    B. As a list of pairs of column indices with limited enums.
    */
-  public DataInfo(Frame train, Frame valid, int nResponses, boolean useAllFactorLevels, TransformType predictor_transform, TransformType response_transform, boolean skipMissing, boolean imputeMissing, boolean missingBucket, boolean weight, boolean offset, boolean fold, Model.InteractionSpec interactions) {
+  public DataInfo(Frame train, Frame valid, int nResponses, boolean useAllFactorLevels, TransformType predictor_transform, TransformType response_transform, boolean skipMissing, boolean imputeMissing, Imputer imputer, boolean missingBucket, boolean weight, boolean offset, boolean fold, Model.InteractionSpec interactions) {
     super(Key.<DataInfo>make());
     assert predictor_transform != null;
     assert response_transform != null;
@@ -268,7 +276,10 @@ public class DataInfo extends Keyed<DataInfo> {
       }
       else
         _catOffsets[i+1] = (len += v.domain().length - (useAllFactorLevels?0:1) + (missingBucket? 1 : 0)); //missing values turn into a new factor level
-      _catNAFill[i] = imputeMissing?imputeCat(train.vec(cats[i]),_useAllFactorLevels):_catMissing[i]?v.domain().length - (_useAllFactorLevels || isInteractionVec(i)?0:1):-100;
+      _catNAFill[i] = imputeMissing ? 
+              imputer.imputeCat(names[i], train.vec(cats[i]), _useAllFactorLevels)
+              :
+              _catMissing[i] ? v.domain().length - (_useAllFactorLevels || isInteractionVec(i)?0:1) : -100;
       _permutation[i] = cats[i];
     }
     _numOffsets = MemoryManager.malloc4(nnums+1);
@@ -286,19 +297,26 @@ public class DataInfo extends Keyed<DataInfo> {
       _permutation[i+ncats] = nums[i];
     }
     _numMeans = new double[numNums()];
-    int meanIdx=0;
+    _numNAFill = new double[numNums()];
+    int numIdx=0;
     for(int i=0;i<nnums;++i) {
+      String name = train.name(nums[i]);
       Vec v = train.vec(nums[i]);
       if( v instanceof InteractionWrappedVec ) {
         InteractionWrappedVec iwv = (InteractionWrappedVec)v;
-        double[] means = iwv.getMeans();
         int start = iwv._useAllFactorLevels?0:1;
-        int length   = iwv.expandedLength();
-        System.arraycopy(means,start,_numMeans,meanIdx,length);
-        meanIdx+=length;
+        int length = iwv.expandedLength();
+        double[] means = iwv.getMeans();
+        System.arraycopy(means,start,_numMeans,numIdx,length);
+        double[] naFill = imputer.imputeInteraction(name, iwv, means);
+        System.arraycopy(naFill,start,_numNAFill,numIdx,length);
+        numIdx+=length;
       }
-      else
-        _numMeans[meanIdx++]=v.mean();
+      else {
+        _numMeans[numIdx] = v.mean();
+        _numNAFill[numIdx] = imputer.imputeNum(name, v);
+        numIdx++;
+      }
     }
     for(int i = names.length-nResponses - (weight?1:0) - (offset?1:0) - (fold?1:0); i < names.length; ++i) {
       names[i] = train._names[i];
@@ -521,7 +539,7 @@ public class DataInfo extends Keyed<DataInfo> {
       ignoredCols[ignoredCnt++] = k+_cats;
     Frame f = new Frame(_adaptedFrame.names().clone(),_adaptedFrame.vecs().clone());
     if(ignoredCnt > 0) f.remove(Arrays.copyOf(ignoredCols,ignoredCnt));
-    assert catLvls.length < f.numCols():"cats = " + catLvls.length + " numcols = " + f.numCols();
+    assert catLvls.length <= f.numCols():"cats = " + catLvls.length + " numcols = " + f.numCols();
     double [] normSub = null;
     double [] normMul = null;
     int id = Arrays.binarySearch(cols,numStart());
@@ -541,8 +559,11 @@ public class DataInfo extends Keyed<DataInfo> {
     DataInfo dinfo = new DataInfo(this,f,normMul,normSub,catLvls,intLvls,catModes,cols);
     dinfo._nums=f.numCols()-dinfo._cats - dinfo._responses - (dinfo._offset?1:0) - (dinfo._weights?1:0) - (dinfo._fold?1:0);
     dinfo._numMeans=new double[nnums];
-    for(int k=id; k < (id+nnums);++k )
-      dinfo._numMeans[k-id] = _numMeans[cols[k]-off];
+    dinfo._numNAFill=new double[nnums];
+    for(int k=id; k < (id+nnums);++k ) {
+      dinfo._numMeans[k - id] = _numMeans[cols[k] - off];
+      dinfo._numNAFill[k - id] = _numNAFill[cols[k] - off];
+    }
     return dinfo;
   }
 
@@ -783,14 +804,9 @@ public class DataInfo extends Keyed<DataInfo> {
     public int       cid;      // categorical id
     public int       nBins;    // number of enum    columns (not expanded)
     public int       nNums;    // number of numeric columns (not expanded)
-    public int       nOutpus;
     public double    offset = 0;
     public double    weight = 1;
-    private C8DChunk [] _outputs;
 
-
-    public void setOutput(int i, double v) {_outputs[i].set8D(cid,v);}
-    public double getOutput(int i) {return _outputs[i].get8D(cid);}
     public final boolean isSparse(){return numIds != null;}
 
 
@@ -900,6 +916,29 @@ public class DataInfo extends Keyed<DataInfo> {
         res += vec[vec.length-1];
       return res;
     }
+    public final double innerProduct(DataInfo.Row row) {
+      assert !_intercept;
+      assert numIds == null;
+
+      double res = 0;
+      for (int i = 0; i < nBins; ++i)
+        if (binIds[i] == row.binIds[i])
+          res += 1;
+      for (int i = 0; i < numVals.length; ++i)
+        res += numVals[i] * row.numVals[i];
+
+      return res;
+    }
+    public final double twoNormSq() {
+      assert !_intercept;
+      assert numIds == null;
+
+      double res = nBins;
+      for (double v : numVals)
+        res += v * v;
+
+      return res;
+    }
 
     public double[] expandCats() {
       if(isSparse() || _responses > 0) throw H2O.unimpl();
@@ -937,6 +976,16 @@ public class DataInfo extends Keyed<DataInfo> {
         }
     }
 
+    public Row deepClone() {
+      Row cloned = (Row) clone();
+      cloned.numVals = numVals.clone();
+      if (numIds != null)
+        cloned.numIds = numIds.clone();
+      cloned.response = response.clone();
+      cloned.binIds = binIds.clone();
+      return cloned;
+    }
+    
     public void addToArray(double scale, double []res) {
       for (int i = 0; i < nBins; i++)
         res[binIds[i]] += scale;
@@ -1049,7 +1098,7 @@ public class DataInfo extends Keyed<DataInfo> {
           double d=0;
           if( offset==interactionOffset ) d=chunks[_cats + i].atd(rid);
           if( Double.isNaN(d) )
-            d = _numMeans[numValsIdx];
+            d = _numNAFill[numValsIdx];
           if( _normMul != null && _normSub != null )
             d = (d - _normSub[numValsIdx]) * _normMul[numValsIdx];
           row.numVals[numValsIdx++]=d;
@@ -1057,7 +1106,7 @@ public class DataInfo extends Keyed<DataInfo> {
       } else {
         double d = chunks[_cats + i].atd(rid); // can be NA if skipMissing() == false
         if (Double.isNaN(d))
-          d = _numMeans[numValsIdx];
+          d = _numNAFill[numValsIdx];
         if (_normMul != null && _normSub != null)
           d = (d - _normSub[numValsIdx]) * _normMul[numValsIdx];
         row.numVals[numValsIdx++] = d;
@@ -1181,7 +1230,7 @@ public class DataInfo extends Keyed<DataInfo> {
             if( c.atd(r)==0 ) continue;
             double d = c.atd(r);
             if( Double.isNaN(d) )
-              d = _numMeans[interactionOffset+cidVirtualOffset];  // FIXME: if this produces a "true" NA then should sub with mean? with?
+              d = _numNAFill[interactionOffset+cidVirtualOffset];  // FIXME: if this produces a "true" NA then should sub with mean? with?
             if (_normMul != null)
               d *= _normMul[interactionOffset+cidVirtualOffset];
             row.addNum(numStart()+interactionOffset+cidVirtualOffset, d);
@@ -1198,7 +1247,7 @@ public class DataInfo extends Keyed<DataInfo> {
           if (row.predictors_bad) continue;
           double d = c.atd(r);
           if (Double.isNaN(d))
-            d = _numMeans[cid];
+            d = _numNAFill[cid];
           if (_normMul != null)
             d *= _normMul[interactionOffset];
           row.addNum(numStart()+interactionOffset,d);
@@ -1272,4 +1321,37 @@ public class DataInfo extends Keyed<DataInfo> {
     }
     return res;
   }
+
+  /**
+   * Creates a DataInfo for scoring on a test Frame from a DataInfo instance created during model training
+   * This is a lightweight version of the method only usable for models that don't use advanced features of DataInfo (eg. interaction terms)
+   * @return DataInfo for scoring
+   */
+  public DataInfo scoringInfo() {
+    DataInfo res = IcedUtils.deepCopy(this);
+    res._valid = true;
+    return res;
+  }
+
+  public interface Imputer {
+    int imputeCat(String name, Vec v, boolean useAllFactorLevels);
+    double imputeNum(String name, Vec v);
+    double[] imputeInteraction(String name, InteractionWrappedVec iv, double[] means);
+  }
+
+  public static class MeanImputer implements Imputer {
+    @Override
+    public int imputeCat(String name, Vec v, boolean useAllFactorLevels) {
+      return DataInfo.imputeCat(v, useAllFactorLevels);
+    }
+    @Override
+    public double imputeNum(String name, Vec v) {
+      return v.mean();
+    }
+    @Override
+    public double[] imputeInteraction(String name, InteractionWrappedVec iv, double[] means) {
+      return means;
+    }
+  }
+  
 }

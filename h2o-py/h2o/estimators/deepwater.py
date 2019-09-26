@@ -22,31 +22,29 @@ class H2ODeepWaterEstimator(H2OEstimator):
     """
 
     algo = "deepwater"
+    param_names = {"model_id", "checkpoint", "autoencoder", "training_frame", "validation_frame", "nfolds",
+                   "balance_classes", "max_after_balance_size", "class_sampling_factors",
+                   "keep_cross_validation_models", "keep_cross_validation_predictions",
+                   "keep_cross_validation_fold_assignment", "fold_assignment", "fold_column", "response_column",
+                   "offset_column", "weights_column", "ignored_columns", "score_each_iteration", "categorical_encoding",
+                   "overwrite_with_best_model", "epochs", "train_samples_per_iteration", "target_ratio_comm_to_comp",
+                   "seed", "standardize", "learning_rate", "learning_rate_annealing", "momentum_start", "momentum_ramp",
+                   "momentum_stable", "distribution", "score_interval", "score_training_samples",
+                   "score_validation_samples", "score_duty_cycle", "classification_stop", "regression_stop",
+                   "stopping_rounds", "stopping_metric", "stopping_tolerance", "max_runtime_secs", "ignore_const_cols",
+                   "shuffle_training_data", "mini_batch_size", "clip_gradient", "network", "backend", "image_shape",
+                   "channels", "sparse", "gpu", "device_id", "cache_data", "network_definition_file",
+                   "network_parameters_file", "mean_image_file", "export_native_parameters_prefix", "activation",
+                   "hidden", "input_dropout_ratio", "hidden_dropout_ratios", "problem_type", "export_checkpoints_dir"}
 
     def __init__(self, **kwargs):
         super(H2ODeepWaterEstimator, self).__init__()
         self._parms = {}
-        names_list = {"model_id", "checkpoint", "autoencoder", "training_frame", "validation_frame", "nfolds",
-                      "balance_classes", "max_after_balance_size", "class_sampling_factors",
-                      "keep_cross_validation_models", "keep_cross_validation_predictions",
-                      "keep_cross_validation_fold_assignment", "fold_assignment", "fold_column", "response_column",
-                      "offset_column", "weights_column", "ignored_columns", "score_each_iteration",
-                      "categorical_encoding", "overwrite_with_best_model", "epochs", "train_samples_per_iteration",
-                      "target_ratio_comm_to_comp", "seed", "standardize", "learning_rate", "learning_rate_annealing",
-                      "momentum_start", "momentum_ramp", "momentum_stable", "distribution", "score_interval",
-                      "score_training_samples", "score_validation_samples", "score_duty_cycle", "classification_stop",
-                      "regression_stop", "stopping_rounds", "stopping_metric", "stopping_tolerance", "max_runtime_secs",
-                      "ignore_const_cols", "shuffle_training_data", "mini_batch_size", "clip_gradient", "network",
-                      "backend", "image_shape", "channels", "sparse", "gpu", "device_id", "cache_data",
-                      "network_definition_file", "network_parameters_file", "mean_image_file",
-                      "export_native_parameters_prefix", "activation", "hidden", "input_dropout_ratio",
-                      "hidden_dropout_ratios", "problem_type", "export_checkpoints_dir"}
-        if "Lambda" in kwargs: kwargs["lambda_"] = kwargs.pop("Lambda")
         for pname, pvalue in kwargs.items():
             if pname == 'model_id':
                 self._id = pvalue
                 self._parms["model_id"] = pvalue
-            elif pname in names_list:
+            elif pname in self.param_names:
                 # Using setattr(...) will invoke type-checking of the arguments
                 setattr(self, pname, pvalue)
             else:
@@ -93,8 +91,7 @@ class H2ODeepWaterEstimator(H2OEstimator):
 
     @training_frame.setter
     def training_frame(self, training_frame):
-        assert_is_type(training_frame, None, H2OFrame)
-        self._parms["training_frame"] = training_frame
+        self._parms["training_frame"] = H2OFrame._validate(training_frame, 'training_frame')
 
 
     @property
@@ -108,8 +105,7 @@ class H2ODeepWaterEstimator(H2OEstimator):
 
     @validation_frame.setter
     def validation_frame(self, validation_frame):
-        assert_is_type(validation_frame, None, H2OFrame)
-        self._parms["validation_frame"] = validation_frame
+        self._parms["validation_frame"] = H2OFrame._validate(validation_frame, 'validation_frame')
 
 
     @property
@@ -179,7 +175,7 @@ class H2ODeepWaterEstimator(H2OEstimator):
         """
         Whether to keep the cross-validation models.
 
-        Type: ``bool``  (default: ``False``).
+        Type: ``bool``  (default: ``True``).
         """
         return self._parms.get("keep_cross_validation_models")
 
@@ -637,17 +633,19 @@ class H2ODeepWaterEstimator(H2OEstimator):
     @property
     def stopping_metric(self):
         """
-        Metric to use for early stopping (AUTO: logloss for classification, deviance for regression)
+        Metric to use for early stopping (AUTO: logloss for classification, deviance for regression and anonomaly_score
+        for Isolation Forest). Note that custom and custom_increasing can only be used in GBM and DRF with the Python
+        client.
 
         One of: ``"auto"``, ``"deviance"``, ``"logloss"``, ``"mse"``, ``"rmse"``, ``"mae"``, ``"rmsle"``, ``"auc"``,
-        ``"lift_top_group"``, ``"misclassification"``, ``"mean_per_class_error"``, ``"custom"``, ``"custom_increasing"``
-        (default: ``"auto"``).
+        ``"lift_top_group"``, ``"misclassification"``, ``"aucpr"``, ``"mean_per_class_error"``, ``"custom"``,
+        ``"custom_increasing"``  (default: ``"auto"``).
         """
         return self._parms.get("stopping_metric")
 
     @stopping_metric.setter
     def stopping_metric(self, stopping_metric):
-        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "mean_per_class_error", "custom", "custom_increasing"))
+        assert_is_type(stopping_metric, None, Enum("auto", "deviance", "logloss", "mse", "rmse", "mae", "rmsle", "auc", "lift_top_group", "misclassification", "aucpr", "mean_per_class_error", "custom", "custom_increasing"))
         self._parms["stopping_metric"] = stopping_metric
 
 
@@ -1017,11 +1015,12 @@ class H2ODeepWaterEstimator(H2OEstimator):
         self._parms["export_checkpoints_dir"] = export_checkpoints_dir
 
 
-
-    # Ask the H2O server whether a Deep Water model can be built (depends on availability of native backends)
     @staticmethod
     def available():
-        """Returns True if a deep water model can be built, or False otherwise."""
+        """
+        Ask the H2O server whether a Deep Water model can be built (depends on availability of native backends).
+        :return: True if a deep water model can be built, or False otherwise.
+        """
         builder_json = h2o.api("GET /3/ModelBuilders", data={"algo": "deepwater"})
         visibility = builder_json["model_builders"]["deepwater"]["visibility"]
         if visibility == "Experimental":

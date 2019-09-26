@@ -251,6 +251,7 @@ public final class ComputationState {
         return 2*likelihood();
       case poisson:
       case gamma:
+      case negativebinomial:  
       case tweedie:
         return likelihood();
       default:
@@ -508,7 +509,7 @@ public final class ComputationState {
     _beta = beta;
     _ginfo = null;
     _likelihood = likelihood;
-    return (_relImprovement = (objOld - objective())/objOld);
+    return (_relImprovement = (objOld - objective())/Math.abs(objOld));
   }
   private double _betaDiff;
   private double _relImprovement;
@@ -535,7 +536,7 @@ public final class ComputationState {
     else System.arraycopy(beta,0,_beta,0,beta.length);
     _ginfo = ginfo;
     _likelihood = ginfo._likelihood;
-    return (_relImprovement = (objOld - objective())/objOld);
+    return (_relImprovement = (objOld - objective())/Math.abs(objOld));
   }
 
   public double [] expandBeta(double [] beta) {
